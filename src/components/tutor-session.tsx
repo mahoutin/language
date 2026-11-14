@@ -47,8 +47,7 @@ export function TutorSession({
   const stopPlayback = useRef<() => void>(() => {});
   const stopAudio = useCallback(() => stopPlayback.current(), []);
   useMediaCleanup(stopAudio, stopAudio);
-  const selfViewVideo = useRef<HTMLVideoElement>(null);
-  const camera = useCameraPreview(selfViewVideo);
+  const camera = useCameraPreview();
   const helpVisible = help || (attempts >= 2 && dismissedHelpAt !== attempts);
   const instruction =
     activity.id === "transfer"
@@ -107,7 +106,7 @@ export function TutorSession({
 
       <aside className={styles.selfView} aria-label="Votre aperçu caméra">
         <video
-          ref={selfViewVideo}
+          ref={camera.attachVideo}
           autoPlay
           playsInline
           muted

@@ -135,10 +135,9 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
   );
 }
 
-export function useCameraPreview(
-  video: React.RefObject<HTMLVideoElement | null>,
-) {
+export function useCameraPreview() {
   const stream = useRef<MediaStream | null>(null);
+  const video = useRef<HTMLVideoElement | null>(null);
   const generation = useRef(0);
   const removeEndedListener = useRef<(() => void) | null>(null);
   const [active, setActive] = useState(false);
@@ -152,7 +151,10 @@ export function useCameraPreview(
     stream.current?.getTracks().forEach((track) => track.stop());
     stream.current = null;
     if (video.current) video.current.srcObject = null;
-  }, [video]);
+  }, []);
+  const attachVideo = useCallback((element: HTMLVideoElement | null) => {
+    video.current = element;
+  }, []);
   const stop = useCallback(() => {
     release();
     setActive(false);
@@ -204,5 +206,5 @@ export function useCameraPreview(
     }
   }
 
-  return { active, pending, message, start, stop };
+  return { active, pending, message, attachVideo, start, stop };
 }
