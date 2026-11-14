@@ -45,13 +45,17 @@ export function buildRecap(state: ConversationState): Recap {
       observed.push(`Vous avez demandé de l’aide pour : ${topic}.`);
     }
   }
-  const unclear = Object.values(state.progress).reduce(
-    (n, p) => n + p.unclear,
-    0,
-  );
-  if (unclear > 0)
+  const total = (key: "unclear" | "partial") =>
+    Object.values(state.progress).reduce((n, p) => n + p[key], 0);
+  // A short answer such as a bare name is understandable: say so, and never
+  // present it as a problem with the learner's English.
+  if (total("partial") > 0)
     observed.push(
-      "Quelques réponses étaient trop courtes pour être comprises : ce n’est pas une erreur.",
+      "Vous avez parfois répondu par un seul mot, par exemple votre prénom. C’est compréhensible : je vous ai simplement proposé une phrase complète.",
+    );
+  if (total("unclear") > 0)
+    observed.push(
+      "Quelques saisies étaient vides ou illisibles pour moi (des symboles, par exemple). Ce n’est pas une erreur.",
     );
   if (observed.length === 0 && practised.length > 0)
     observed.push(

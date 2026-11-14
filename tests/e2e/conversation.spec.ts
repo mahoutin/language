@@ -715,6 +715,68 @@ test.describe("keyboard and accessible names", () => {
   });
 });
 
+test.describe("narrow layout: the dock never covers instructional content", () => {
+  for (const [width, height, contained] of [
+    [390, 844, true],
+    [360, 640, true],
+    [640, 360, false],
+  ] as const) {
+    test(`densest repair state at ${width}×${height}`, async ({ page }) => {
+      await stubSpeech(page, { autoEnd: true });
+      await page.setViewportSize({ width, height });
+      await toLearnerTurn(page);
+      // Two misses: French help opens and the sentence frame appears.
+      await field(page).fill("Yes please");
+      await answer(page).click();
+      await answer(page).click();
+      await expect(
+        page.getByText("Aide en français", { exact: true }),
+      ).toBeVisible();
+      await expect(page.getByText("My name is …")).toBeVisible();
+
+      const dock = page.getByRole("group", { name: "Commandes de la séance" });
+      const selfView = page.getByLabel("Votre aperçu caméra");
+      const controls = page.locator(
+        "section[aria-labelledby='tutor-activity'] button, section[aria-labelledby='tutor-activity'] input, section[aria-labelledby='tutor-activity'] h1",
+      );
+      const count = await controls.count();
+      expect(count).toBeGreaterThan(5);
+      for (let i = 0; i < count; i++) {
+        const control = controls.nth(i);
+        await control.scrollIntoViewIfNeeded();
+        const box = (await control.boundingBox())!;
+        const dockBox = (await dock.boundingBox())!;
+        const label = (await control.textContent())?.trim() || "input";
+        // Fully above the dock (or fully below it, for page-scrolling layouts).
+        const above = box.y + box.height <= dockBox.y + 1;
+        const below = box.y >= dockBox.y + dockBox.height - 1;
+        expect(above || below, `${label} overlaps the dock`).toBe(true);
+        // ...and never underneath the self-view tile either.
+        const tile = (await selfView.boundingBox())!;
+        const apart =
+          box.y + box.height <= tile.y + 1 ||
+          box.y >= tile.y + tile.height - 1 ||
+          box.x + box.width <= tile.x + 1 ||
+          box.x >= tile.x + tile.width - 1;
+        expect(apart, `${label} overlaps the self-view`).toBe(true);
+      }
+      const dockBox = (await dock.boundingBox())!;
+      expect(dockBox.y + dockBox.height).toBeLessThanOrEqual(height + 1);
+      await expect(
+        page.getByRole("button", { name: "Quitter" }),
+      ).toBeInViewport({ ratio: 1 });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBe(width);
+      if (contained)
+        // The stage is exactly one viewport tall; only the card scrolls.
+        expect(
+          await page.evaluate(() => document.documentElement.scrollHeight),
+        ).toBe(height);
+    });
+  }
+});
+
 test.describe("layout and review screenshots", () => {
   for (const [width, height] of [
     [1440, 900],

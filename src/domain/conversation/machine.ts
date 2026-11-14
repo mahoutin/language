@@ -99,6 +99,7 @@ function blankProgress(): ActivityProgress {
     attempts: 0,
     incorrect: 0,
     unclear: 0,
+    partial: 0,
     helpRequests: 0,
     strategies: [],
     silenceCheckins: 0,
@@ -413,7 +414,11 @@ function handle(
           const counted = {
             ...open,
             unclearStreak: streak,
-            progress: bump(s, (p) => ({ ...p, unclear: p.unclear + 1 })),
+            progress: bump(s, (p) =>
+              kind === "partial"
+                ? { ...p, partial: p.partial + 1 }
+                : { ...p, unclear: p.unclear + 1 },
+            ),
           };
           if (streak >= 2) {
             const repaired = escalate(counted);

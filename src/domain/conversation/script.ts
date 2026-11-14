@@ -143,12 +143,45 @@ const speakLadder: Ladder = [
 export const ladderFor = (activity: Activity): Ladder =>
   activity.type === "choice" ? choiceLadder : speakLadder;
 
-/** Two options (the correct one second, so position never gives the answer away). */
-export function narrowedOptions(activity: Activity): readonly number[] {
+function hash(text: string): number {
+  let h = 0;
+  for (const char of text) h = (h * 31 + char.charCodeAt(0)) | 0;
+  return Math.abs(h);
+}
+
+/**
+ * Which "variant" of the reduced choice this is. It is deterministic (so it is
+ * testable and stable while a turn is on screen) but not constant: it advances
+ * with every earlier reduced-choice presentation in the session, starting from a
+ * per-session offset. The correct answer therefore never sits in the same slot
+ * in consecutive reduced-choice attempts.
+ */
+export function reducedVariant(state: ConversationState): number {
+  const current = activities[state.activityIndex]?.id;
+  let earlier = 0;
+  for (const [id, progress] of Object.entries(state.progress))
+    if (id !== current)
+      earlier += progress.strategies.filter(
+        (x) => x === "fewer_options",
+      ).length;
+  return earlier + hash(state.sessionId);
+}
+
+/**
+ * Two options: the correct one plus one distractor. Both the slot of the correct
+ * answer (parity of `variant`) and which distractor stays (rotating) vary.
+ */
+export function narrowedOptions(
+  activity: Activity,
+  variant: number,
+): readonly number[] {
   if (activity.type !== "choice") return [];
   const correct = activity.options.findIndex((o) => o.correct);
-  const distractor = activity.options.findIndex((o) => !o.correct);
-  return [distractor, correct];
+  const distractors = activity.options.flatMap((o, i) =>
+    o.correct ? [] : [i],
+  );
+  const distractor = distractors[Math.floor(variant / 2) % distractors.length];
+  return variant % 2 === 0 ? [distractor, correct] : [correct, distractor];
 }
 
 // ---------- response classification ----------
@@ -330,7 +363,7 @@ export function visibleOptionIndices(
   const activity = activities[state.activityIndex];
   if (!activity || activity.type !== "choice") return [];
   return state.repair.strategy === "fewer_options"
-    ? narrowedOptions(activity)
+    ? narrowedOptions(activity, reducedVariant(state))
     : activity.options.map((_, i) => i);
 }
 

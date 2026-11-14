@@ -501,6 +501,37 @@
   }
 }
 
+/* Narrow or short viewports: the stage is exactly one viewport tall and only
+   the card scrolls, in the space between the header/self-view and the dock.
+   The dock therefore never covers instructional content. */
+@media (max-width: 600px), (max-height: 560px) {
+  .stage {
+    height: 100svh;
+    min-height: 0;
+  }
+  .lesson {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  .card {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .dockArea {
+    position: static;
+  }
+}
+
+/* Short landscape screens: keep the card beside, not under, the self-view. */
+@media (max-height: 560px) and (min-width: 601px) and (max-width: 900px) {
+  .lesson {
+    width: auto;
+    margin: 0 11rem 0 1rem;
+  }
+}
+
 @media (forced-colors: active) {
   .stage :is(button, input):focus-visible {
     outline-color: Highlight;

@@ -16,6 +16,7 @@ import {
   feedbackText,
   invariantViolations,
   narrowedOptions,
+  reducedVariant,
   visibleOptionIndices,
   visibleOverlays,
 } from "../../src/domain/conversation/script";
@@ -42,14 +43,16 @@ class Run {
   effects: Effect[] = [];
   last!: StepResult;
   commits = 0;
-  constructor(learner: LearnerState = initialState()) {
+  sid: string;
+  constructor(learner: LearnerState = initialState(), sid = "s1") {
     this.learner = learner;
-    this.conv = createConversation("s1", learner);
+    this.sid = sid;
+    this.conv = createConversation(sid, learner);
   }
   send(body: Body): StepResult {
     const event = {
       eventId: `e${++this.n}`,
-      sessionId: "s1",
+      sessionId: this.sid,
       turnId: this.conv.turnId,
       ...body,
     } as ConversationEvent;
@@ -490,10 +493,12 @@ describe("response kinds are distinct outcomes", () => {
     // Second non-answer in a row: the tutor changes method instead of repeating itself.
     expect(run.conv.repair.strategy).toBe("slow_with_french");
     expect(run.learner).toBe(before);
+    // A bare word is understandable ("partial"); symbols are not ("unclear").
     expect(run.conv.progress["say-name"]).toMatchObject({
       attempts: 0,
       incorrect: 0,
-      unclear: 2,
+      unclear: 1,
+      partial: 1,
     });
   });
 
@@ -682,8 +687,10 @@ describe("adaptive repair (deterministic, genuinely different methods)", () => {
       activities[0].type === "choice"
         ? activities[0].options.findIndex((o) => o.correct)
         : -1;
-    expect(visible.at(-1)).toBe(correct);
-    expect(narrowedOptions(activities[0])).toEqual(visible);
+    expect(visible).toContain(correct);
+    expect(narrowedOptions(activities[0], reducedVariant(run.conv))).toEqual(
+      visible,
+    );
     // An option that was removed can no longer be selected.
     const removed = [0, 1, 2].find((i) => !visible.includes(i))!;
     expect(run.send({ type: "draft_changed", choice: removed }).ignored).toBe(
@@ -716,6 +723,66 @@ describe("adaptive repair (deterministic, genuinely different methods)", () => {
     expect(run.last.effects.find((e) => e.type === "speak")).toMatchObject({
       rate: 0.65,
     });
+  });
+});
+
+describe("reduced choice does not give the answer away by position", () => {
+  const reduceOnce = (run: Run) => {
+    run.answerChoice(1); // first miss: slower + French
+    run.answerChoice(2); // second miss: two options
+    const visible = visibleOptionIndices(run.conv);
+    expect(visible).toHaveLength(2);
+    expect(visible).toContain(0); // the correct option is always offered
+    const slot = visible.indexOf(0);
+    run.answerChoice(0);
+    return slot;
+  };
+
+  it("the correct slot alternates across consecutive reduced-choice attempts", () => {
+    const run = new Run().begin();
+    run.send({ type: "continue" });
+    const slots = [reduceOnce(run), reduceOnce(run)];
+    run.type("My name is Alex").submit();
+    slots.push(reduceOnce(run));
+    expect(run.conv.activityIndex).toBe(4);
+    expect(slots[0]).not.toBe(slots[1]);
+    expect(slots[1]).not.toBe(slots[2]);
+    expect(new Set(slots).size).toBe(2); // both slots are used
+  });
+
+  it("is deterministic for a session and varies between sessions", () => {
+    const slotsFor = (sessionId: string) => {
+      const run = new Run(initialState(), sessionId);
+      run.begin();
+      run.send({ type: "continue" });
+      return reduceOnce(run);
+    };
+    expect(slotsFor("same")).toBe(slotsFor("same"));
+    const seen = new Set(
+      ["a", "b", "c", "d", "e", "f", "g", "h"].map(slotsFor),
+    );
+    expect(seen.size).toBe(2);
+  });
+
+  it("covers both slots and rotates the remaining distractor", () => {
+    const activity = activities[0];
+    const shapes = [0, 1, 2, 3].map((v) => narrowedOptions(activity, v));
+    expect(new Set(shapes.map((s) => s.indexOf(0))).size).toBe(2);
+    expect(new Set(shapes.map((s) => s.find((i) => i !== 0))).size).toBe(2);
+    for (const shape of shapes) expect(shape).toHaveLength(2);
+    expect(narrowedOptions(activities[2], 0)).toEqual([]); // speak activity
+  });
+
+  it("the offered pair stays stable while the turn is on screen", () => {
+    const run = new Run().begin();
+    run.send({ type: "continue" });
+    run.answerChoice(1);
+    run.answerChoice(2);
+    const before = visibleOptionIndices(run.conv);
+    run.send({ type: "help_opened" });
+    run.send({ type: "replay", slow: false });
+    run.send({ type: "captions_toggled" });
+    expect(visibleOptionIndices(run.conv)).toEqual(before);
   });
 });
 
@@ -930,6 +997,35 @@ describe("recap is careful and bounded", () => {
     expect(recap.next).toContain("vous présenter");
     expect(recap.caveat).toMatch(/pas une preuve de maîtrise/);
     expect(JSON.stringify(recap)).not.toMatch(/maîtris(?!e)|fluent|niveau/i);
+  });
+
+  it("a bare name is described as understandable, never as unintelligible", () => {
+    const run = new Run().goTo(2);
+    run.type("Alex").submit(); // a short but understandable name
+    run.type("I'm Alex").submit();
+    run.send({ type: "skip" }); // Maria
+    run.type("I'm Alex").submit();
+    const recap = buildRecap(run.conv);
+    const text = recap.observed.join(" ");
+    expect(text).toContain("un seul mot");
+    expect(text).toContain("C’est compréhensible");
+    expect(text).not.toMatch(
+      /trop courtes?|pas pu être compris|incompréhensible|illisible|erreur/i,
+    );
+    // A bare name is not a reason to schedule extra work either.
+    expect(recap.next).not.toContain("vous présenter");
+  });
+
+  it("unreadable input is reported separately and without blame", () => {
+    const run = new Run().goTo(2);
+    run.type("12 !!").submit();
+    run.type("I'm Alex").submit();
+    run.send({ type: "skip" });
+    run.type("I'm Alex").submit();
+    const text = buildRecap(run.conv).observed.join(" ");
+    expect(text).toContain("vides ou illisibles");
+    expect(text).toContain("Ce n’est pas une erreur");
+    expect(text).not.toContain("un seul mot");
   });
 
   it("restart from the recap keeps earlier evidence", () => {

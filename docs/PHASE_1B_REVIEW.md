@@ -2,6 +2,16 @@
 
 Phase 1B turns the Phase 1A presentation shell into **one scripted tutoring conversation**. There is no AI, no realtime model, no avatar video and no backend. Daniel’s voice is the browser’s speech synthesis. His portrait is a still image. Every line, every repair and every reaction is pre-written. The purpose is to validate the interaction contract and the experience before any provider is integrated.
 
+## Review outcome and corrections
+
+Direction approved by the product owner (CI run 43654898234 passed). Decisions: Alex stays the transfer speaker with Maria in the preceding reading activity; `evidence.modality` is approved, and browser recognition is **not** treated as verified pronunciation; bare-name replies stay acknowledged and unpenalized, and `assess()` is not modified in Phase 1B.
+
+Corrections made before merge, each with a regression test:
+
+1. **Reduced choice no longer leaks the answer by position.** `narrowedOptions()` used to put the correct option second every time. The slot is now `reducedVariant(state) % 2`, where the variant advances with every earlier reduced-choice presentation in the session, starting from a per-session offset. It is deterministic (stable while a turn is on screen, testable) but the correct slot alternates across consecutive attempts, and the remaining distractor rotates. Tests: alternation across three activities in one session, determinism per session, variation between sessions, both slots and distractors covered, stability under help/replay/captions.
+2. **390 px overlap fixed.** At phone width, or on short viewports, the stage is exactly one viewport tall and only the card scrolls, between the header/self-view and the dock. The dock no longer floats over content, and short landscape screens keep the card beside the self-view. Test: in the densest repair state at 390×844, 360×640 and 640×360, every control and heading is scrolled into view and must not intersect the dock or the self-view. I confirmed the test fails against the previous CSS at all three sizes (it also exposed a self-view overlap at 640×360).
+3. **Recap wording.** “Trop courtes pour être comprises” implied that a short name was unintelligible. A bare word is now counted separately (`partial`) and described as understandable: « Vous avez parfois répondu par un seul mot, par exemple votre prénom. C’est compréhensible : je vous ai simplement proposé une phrase complète. » Only genuinely unreadable input (symbols, a single letter) is reported separately, without blame. A bare name no longer adds a “to rework” target. Tests assert the wording and forbid “trop courtes”, “incompréhensible”, “illisible” and “erreur” in the bare-name recap.
+
 ## What works, what is simulated, what does not exist
 
 | Working | Simulated (scripted, labelled as such) | Not built |
@@ -33,7 +43,7 @@ Deviation to review: the handoff suggests Maria as the transfer speaker. Preserv
 
 | Activity type | 1st miss | 2nd | 3rd | after |
 | --- | --- | --- | --- | --- |
-| Choice (listening / reading) | slower audio + French meaning | **two** options instead of three (correct one never first) | French explanation + offer to continue without evaluation | the offer stays; message changes instead of repeating |
+| Choice (listening / reading) | slower audio + French meaning | **two** options instead of three (the correct one’s slot alternates between attempts) | French explanation + offer to continue without evaluation | the offer stays; message changes instead of repeating |
 | Speak (`say-name`, `transfer`) | slower audio + French meaning | sentence frame with a gap (« My name is … ») | **diagnostic probe**: pick the sentence that answers the question (not scored, never written) | supported retry with explanation, then offer to continue |
 
 “Je ne comprends pas” climbs the same ladder without counting as an error. Replay, slower replay and opening Aide never climb it.
@@ -68,7 +78,7 @@ Every event carries `eventId`, `sessionId` and `turnId`. The reducer drops: anot
 ## Evidence and data protection
 
 - No new database, no migration, no change to ids, storage key, schema version or `assess()`.
-- One additive, optional field: `evidence.modality` (`typed` | `browser-recognition`), because a typed answer and one produced by speech recognition (then confirmed by the learner) are different observations. Every earlier v1 and v2 record still parses unchanged; unknown values are rejected. Choice answers carry no modality.
+- One additive, optional field: `evidence.modality` (`typed` | `browser-recognition`), because a typed answer and one produced by speech recognition (then confirmed by the learner) are different observations. Every earlier v1 and v2 record still parses unchanged; unknown values are rejected. Choice answers carry no modality. `browser-recognition` only records how the text arrived; it is never evidence of verified pronunciation or intelligibility, and the recap says so.
 - Recorded: submitted answers (correct or incorrect) and explicit skips. Not recorded: help and replay requests, the diagnostic probe, unclear or bare-word replies, silence, thinking, interruptions, device failures. These stay in session memory and feed only the recap.
 - A bare single word (for example a name alone) is acknowledged and the tutor invites a short sentence; it is **not** recorded as incorrect. Two non-answers in a row make the tutor change method instead of repeating itself. `assess()` itself is unchanged, so “I’m Alex” and “My name is Alex” are accepted as before and nothing about earlier evidence changes meaning.
 - Every Phase 1B answer is stored `assisted: true`, because English and French support are visible from the start. This matches Phase 1A.
@@ -107,8 +117,8 @@ Changed: `src/components/tutor-session.tsx` (one persistent session), `tutor-ses
 
 - Real voice quality, real speech recognition accuracy and the actual laptop are **not** established. Automated tests use a deterministic speech stub and a stub recognizer. The prior Phase 1A limit still stands: operating-system capture indicators under live permission revocation were not individually verified.
 - Browser speech synthesis can be silent, or never report that it ended. The learner is then never blocked: “Arrêter la voix”, “J’ai besoin d’un moment”, typing and answering all work while the status still says Daniel is speaking.
-- At 1280 × 720 every state fits without scrolling and the dock stays visible. The densest repair state (French help open plus a sentence frame) covers the lower part of Daniel’s face; at 390 px wide that state scrolls slightly and the sticky dock overlays the last row until scrolled. Both are reachable.
-- The self-view is a compact tile on narrow screens (space is reserved so it never covers text).
+- At 1280 × 720 every state fits without scrolling and the dock stays visible. The densest repair state (French help open plus a sentence frame) covers the lower part of Daniel’s face. At phone width and on short viewports the card scrolls inside its own area above the dock; reading the whole card there means scrolling it.
+- The self-view is a compact tile on narrow screens (space is reserved, and tested, so it never covers text).
 - Fixed French copy was written for this simulation and has not had a native-speaker review.
 - The heuristic `assess()` accepts some non-introductions that happen to match “I am …” (for example “I am fine”). That is existing curriculum behaviour and was deliberately not changed here.
 - The pause when the tab is hidden is automatic and explicit (the learner presses « Reprendre »).

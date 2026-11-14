@@ -18,7 +18,8 @@ const evidenceSchema = z
     responseType: z.enum(["choice", "speak"]).optional(),
     // Added in Phase 1B, optional so every earlier v1/v2 record stays valid.
     // A typed answer and one produced by browser speech recognition (then
-    // confirmed by the learner) are different observations.
+    // confirmed by the learner) are different observations. Recognised text is
+    // never evidence of verified pronunciation or intelligibility.
     modality: z.enum(["typed", "browser-recognition"]).optional(),
   })
   .refine(

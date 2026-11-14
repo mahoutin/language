@@ -85,7 +85,8 @@ export type NoticeKey =
 export type ActivityProgress = {
   attempts: number; // answers submitted to the learning engine
   incorrect: number;
-  unclear: number; // not submitted: unclear or partial replies
+  unclear: number; // not submitted: nothing readable (symbols, a single letter)
+  partial: number; // not submitted: a bare word such as a name; understandable, never an error
   helpRequests: number; // replay, slower, "I don't understand"; never counted as errors
   strategies: Strategy[];
   silenceCheckins: number;
