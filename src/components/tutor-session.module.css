@@ -1,0 +1,380 @@
+.stage {
+  --ink: #f4faf5;
+  --soft-ink: #c8e5d5;
+  --panel: #102b26;
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  overflow: clip;
+  color: var(--ink);
+  background: #132b25;
+  font-family: system-ui, sans-serif;
+}
+
+.portrait {
+  z-index: -2;
+  object-fit: cover;
+  object-position: 53% 8%;
+}
+
+.scrim {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    #071b16bf 0%,
+    #071b1615 20%,
+    transparent 36%,
+    #091c1770 62%,
+    #081b16f5 100%
+  );
+  pointer-events: none;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1.1rem clamp(1rem, 3.3vw, 3rem);
+  background: #0b211bb5;
+}
+
+.brand {
+  color: var(--soft-ink);
+  font-size: clamp(1rem, 2vw, 1.5rem);
+  letter-spacing: -0.04em;
+}
+
+.brand strong {
+  color: white;
+}
+
+.badge,
+.portraitLabel,
+.selfViewLabel {
+  padding: 0.35rem 0.7rem;
+  border-radius: 1rem;
+  background: #112d26;
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.selfView {
+  position: absolute;
+  top: 6.1rem;
+  right: clamp(1rem, 3.3vw, 3rem);
+  width: clamp(9.5rem, 14.6vw, 13.125rem);
+  aspect-ratio: 210 / 144;
+  overflow: hidden;
+  border-radius: 1rem;
+  background: #547c78;
+}
+
+.selfView video,
+.selfViewIllustration {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.selfView video {
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+.selfViewIllustration {
+  background: linear-gradient(#547c78 62%, #315954 62%);
+}
+
+.selfViewHead,
+.selfViewShoulders {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: none;
+}
+
+.selfViewHead {
+  top: 19%;
+}
+.selfViewShoulders {
+  top: 65%;
+}
+
+.selfViewLabel {
+  position: absolute;
+  inset: auto 0.45rem 0.45rem;
+  width: fit-content;
+  max-width: calc(100% - 0.9rem);
+  margin: 0;
+}
+
+.lesson {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  width: min(100% - 2rem, 50rem);
+  margin: auto auto 0;
+  padding-top: clamp(11rem, 36svh, 23rem);
+}
+
+.overlay,
+.response,
+.warning {
+  width: 100%;
+  border: 1px solid #90b5a05e;
+  border-radius: 1.25rem;
+  background: #102b26f5;
+  padding: 0.85rem clamp(0.85rem, 2.5vw, 1.5rem);
+  box-shadow: 0 12px 36px #04100c33;
+}
+
+.overlay[data-help="true"] {
+  color: #112c25;
+  background: #f4f8f0;
+}
+
+.overlay p,
+.overlay h1 {
+  margin: 0;
+}
+.overlay h1 {
+  margin-bottom: 0.35rem;
+  font-size: 1.45rem;
+  letter-spacing: normal;
+}
+.overlay p + p {
+  margin-top: 0.2rem;
+}
+.overlay .instruction {
+  font-size: 1rem;
+  font-weight: 650;
+}
+.caption {
+  font-size: clamp(1.2rem, 2.15vw, 1.8rem);
+  font-weight: 650;
+}
+.french {
+  color: var(--soft-ink);
+  font-size: 1.05rem;
+}
+.overlay[data-help="true"] .french {
+  color: #245a47;
+}
+.overlay .help {
+  border-top: 1px solid #c0d2c5;
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+}
+
+.replay,
+.responseActions,
+.dock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.stage button {
+  min-height: 44px;
+  border: 1px solid #93baa38c;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  color: var(--ink);
+  background: #25433c;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.stage button:hover:not(:disabled) {
+  background: #365c50;
+}
+.stage button:disabled {
+  opacity: 0.6;
+}
+.stage :is(button, input):focus-visible {
+  outline: 3px solid #f5dc97;
+  outline-offset: 3px;
+}
+.overlay h1:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.stage button[aria-pressed="true"],
+.stage .primary {
+  background: #e4f2e7;
+  color: #132e26;
+  border-color: #e4f2e7;
+}
+.stage :is(button[aria-pressed="true"], .primary):hover {
+  background: #fff;
+}
+
+.response {
+  display: grid;
+  gap: 0.55rem;
+  padding-block: 0.55rem;
+}
+.options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.options label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid #93baa38c;
+  border-radius: 0.8rem;
+  background: #25433c;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.options label:has(:checked) {
+  background: #e4f2e7;
+  color: #132e26;
+}
+.options input {
+  accent-color: #195d49;
+  flex: 0 0 auto;
+  margin: 0;
+}
+.answer {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+.answer input {
+  min-height: 44px;
+  min-width: 0;
+  color: #112c25;
+  background: #fff;
+  border: 2px solid #93baa3;
+  border-radius: 0.65rem;
+  padding: 0.4rem 0.65rem;
+}
+.feedback {
+  color: var(--soft-ink);
+}
+.feedback:empty {
+  display: none;
+}
+.warning {
+  margin: 0;
+}
+
+.dockArea {
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(100% - 1.5rem, 35rem);
+  margin: 0.65rem auto 0.85rem;
+}
+
+.dock {
+  background: #102b26f2;
+  border: 1px solid #93baa370;
+  border-radius: 1.5rem;
+  padding: 0.4rem;
+}
+
+.dock button {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 0.13rem;
+  min-width: 4.45rem;
+  min-height: 48px;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.8rem;
+}
+.dock button span {
+  font-size: 1rem;
+  line-height: 1;
+}
+.dock .exit {
+  background: #85443c;
+  border-color: #e7a79f;
+}
+.dock .exit:hover:not(:disabled) {
+  background: #a44d43;
+}
+
+.portraitLabel {
+  position: absolute;
+  inset: auto auto 1.45rem clamp(1rem, 3.3vw, 3rem);
+  margin: 0;
+}
+
+.microphone {
+  width: 100%;
+  margin-top: 0.5rem;
+  border: 1px solid #93baa3;
+  border-radius: 1rem;
+  background: #102b26;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 12px 36px #04100c80;
+}
+.microphone p {
+  margin: 0.5rem 0;
+}
+.microphone label {
+  margin: 0;
+}
+.microphone input {
+  flex: 0 0 19px;
+}
+
+@media (max-height: 760px) and (min-width: 761px) {
+  .lesson {
+    padding-top: 33svh;
+  }
+}
+
+@media (max-width: 960px) {
+  .portraitLabel {
+    position: static;
+    align-self: center;
+    margin-top: 0.5rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .selfView {
+    top: 4.7rem;
+    width: 8.5rem;
+  }
+  .selfViewHead {
+    top: 7%;
+  }
+  .lesson {
+    padding-top: max(9rem, 26svh);
+  }
+  .options {
+    grid-template-columns: 1fr;
+  }
+  .dock {
+    border-radius: 1rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .stage :is(button, input):focus-visible {
+    outline-color: Highlight;
+  }
+  .stage button[aria-pressed="true"] {
+    border: 3px solid Highlight;
+  }
+}
