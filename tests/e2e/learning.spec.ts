@@ -159,7 +159,7 @@ test("manifest, privacy headers, offline fallback and cache allowlist", async ({
     page.getByRole("heading", { name: "Vous êtes hors connexion." }),
   ).toBeVisible();
 });
-test("mobile navigation stays labeled and fits the viewport", async ({
+test("navigation and tutor controls reflow at narrow CSS viewport widths", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -173,6 +173,25 @@ test("mobile navigation stays labeled and fits the viewport", async ({
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
+
+  // Half the CSS viewport width and height of the 1280 × 720 laptop.
+  await page.setViewportSize({ width: 640, height: 360 });
+  await page.getByRole("button", { name: "Aide", exact: true }).click();
+  await expect(
+    page.getByText("Aide en français", { exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
+    640,
+  );
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Séance en pause" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Reprendre" }).click();
+  await page.getByRole("button", { name: "Quitter" }).click();
+  await expect(
+    page.getByRole("button", { name: "Pratiquer", exact: true }),
+  ).toBeVisible();
 });
 
 test("microphone requires consent and aborts on pause, permission loss, and exit", async ({
