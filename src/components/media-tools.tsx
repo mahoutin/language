@@ -1,64 +1,69 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserRecognition, SpeechWindow } from "@/lib/browser-media";
-export function playEnglish(text: string, onError: (message: string) => void) {
+
+export function playEnglish(
+  text: string,
+  onError: (message: string) => void,
+  rate: number,
+): () => void {
   if (!("speechSynthesis" in window)) {
     onError("La lecture audio est indisponible. Vous pouvez lire le texte.");
-    return;
+    return () => {};
   }
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "en-US";
-  utterance.rate = 0.83;
+  utterance.rate = rate;
   utterance.onerror = (event) => {
     if (event.error !== "interrupted" && event.error !== "canceled")
       onError("Lecture audio indisponible. Vous pouvez lire le texte.");
   };
   window.speechSynthesis.speak(utterance);
+  return () => {
+    utterance.onerror = null;
+    window.speechSynthesis.cancel();
+  };
 }
+
+export function useMediaCleanup(release: () => void, reset: () => void) {
+  useEffect(() => {
+    const hide = () => {
+      if (document.hidden) reset();
+    };
+    window.addEventListener("pagehide", reset);
+    document.addEventListener("visibilitychange", hide);
+    return () => {
+      release();
+      window.removeEventListener("pagehide", reset);
+      document.removeEventListener("visibilitychange", hide);
+    };
+  }, [release, reset]);
+}
+
+const speechIdle = "Vous pouvez toujours écrire votre réponse.";
+
 export function SpeechInput({ onText }: { onText: (text: string) => void }) {
   const recognition = useRef<BrowserRecognition | null>(null);
   const [consent, setConsent] = useState(false);
   const [listening, setListening] = useState(false);
-  const [status, setStatus] = useState(
-    "Vous pouvez toujours écrire votre réponse.",
-  );
-  function stop() {
+  const [status, setStatus] = useState(speechIdle);
+  const release = useCallback(() => {
     const current = recognition.current;
     recognition.current = null;
-    if (current) {
-      current.onresult = null;
-      current.onend = null;
-      current.onerror = null;
-      current.abort();
-    }
-    setListening(false);
-  }
-  useEffect(() => {
-    const release = () => {
-      const current = recognition.current;
-      recognition.current = null;
-      if (current) {
-        current.onresult = null;
-        current.onend = null;
-        current.onerror = null;
-        current.abort();
-      }
-    };
-    const hide = () => {
-      if (document.hidden) {
-        release();
-        setListening(false);
-      }
-    };
-    window.addEventListener("pagehide", release);
-    document.addEventListener("visibilitychange", hide);
-    return () => {
-      release();
-      window.removeEventListener("pagehide", release);
-      document.removeEventListener("visibilitychange", hide);
-    };
+    if (!current) return;
+    current.onresult = null;
+    current.onend = null;
+    current.onerror = null;
+    current.abort();
   }, []);
+  const stop = useCallback(() => {
+    release();
+    setListening(false);
+    setStatus(speechIdle);
+  }, [release]);
+  useMediaCleanup(release, stop);
+
   function start() {
     if (!consent) return;
     stop();
@@ -70,27 +75,37 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
       );
       return;
     }
-    const current = new Speech();
-    recognition.current = current;
-    current.lang = "en-US";
-    current.interimResults = false;
-    current.maxAlternatives = 1;
-    current.onresult = (event) => {
-      if (recognition.current !== current) return;
-      onText(event.results[0][0].transcript.slice(0, 500));
-      setStatus("Vérifiez le texte reconnu avant de répondre.");
-    };
-    current.onerror = () =>
-      setStatus(
-        "Microphone indisponible ou parole non reconnue. Écrivez votre réponse.",
-      );
-    current.onend = () => {
-      if (recognition.current === current) {
+    try {
+      const current = new Speech();
+      recognition.current = current;
+      current.lang = "en-US";
+      current.interimResults = false;
+      current.maxAlternatives = 1;
+      current.onresult = (event) => {
+        if (recognition.current !== current) return;
+        onText(event.results[0][0].transcript.slice(0, 500));
+        setStatus("Vérifiez le texte reconnu avant de répondre.");
+      };
+      current.onerror = ({ error }) => {
+        if (recognition.current !== current) return;
+        release();
+        setListening(false);
+        setStatus(
+          error === "not-allowed" || error === "service-not-allowed"
+            ? "Le microphone n’est pas autorisé. Vous pouvez écrire votre réponse."
+            : error === "no-speech"
+              ? "Vous pouvez reprendre quand vous êtes prêt ou écrire votre réponse."
+              : "La reconnaissance vocale est indisponible. Vous pouvez écrire votre réponse.",
+        );
+      };
+      current.onend = () => {
+        if (recognition.current !== current) return;
         recognition.current = null;
         setListening(false);
-      }
-    };
-    try {
+        setStatus((message) =>
+          message === "Je vous écoute…" ? speechIdle : message,
+        );
+      };
       current.start();
       setListening(true);
       setStatus("Je vous écoute…");
@@ -99,135 +114,98 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
       setStatus("Le microphone ne démarre pas. Écrivez votre réponse.");
     }
   }
+
   return (
     <div>
       <label className="toggle-line">
         <input
           type="checkbox"
           checked={consent}
-          onChange={(e) => {
-            setConsent(e.target.checked);
-            if (!e.target.checked) stop();
+          onChange={(event) => {
+            setConsent(event.target.checked);
+            if (!event.target.checked) stop();
           }}
         />
         J’accepte la reconnaissance vocale du navigateur pour cet exercice.
       </label>
-      <p className="subtle">
-        Le navigateur peut transmettre l’audio à son fournisseur. L’application
-        ne conserve ni audio ni transcription.
-      </p>
+      <p>Le navigateur peut transmettre l’audio à son fournisseur.</p>
       <button
-        className="btn secondary"
-        disabled={!consent && !listening}
+        type="button"
+        disabled={!consent}
         onClick={listening ? stop : start}
       >
         {listening ? "Arrêter le microphone" : "Parler en anglais"}
       </button>
-      <p role="status" className="subtle">
-        {status}
-      </p>
+      <p role="status">{status}</p>
     </div>
   );
 }
-export function CameraPreview() {
+
+export function useCameraPreview() {
   const stream = useRef<MediaStream | null>(null);
-  const video = useRef<HTMLVideoElement | null>(null);
   const generation = useRef(0);
-  const [active, setActive] = useState(false);
+  const removeEndedListener = useRef<(() => void) | null>(null);
+  const [preview, setPreview] = useState<MediaStream | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("La caméra est éteinte.");
-  function stop() {
+
+  const release = useCallback(() => {
     generation.current++;
+    removeEndedListener.current?.();
+    removeEndedListener.current = null;
     stream.current?.getTracks().forEach((track) => track.stop());
     stream.current = null;
-    if (video.current) video.current.srcObject = null;
-    setActive(false);
+  }, []);
+  const stop = useCallback(() => {
+    release();
+    setPreview(null);
     setPending(false);
     setMessage("La caméra est éteinte.");
-  }
-  useEffect(() => {
-    const release = () => {
-      generation.current++;
-      stream.current?.getTracks().forEach((track) => track.stop());
-      stream.current = null;
-    };
-    const hide = () => {
-      if (document.hidden) {
-        release();
-        setActive(false);
-        setPending(false);
-        setMessage("La caméra est éteinte.");
-      }
-    };
-    window.addEventListener("pagehide", release);
-    document.addEventListener("visibilitychange", hide);
-    return () => {
-      release();
-      window.removeEventListener("pagehide", release);
-      document.removeEventListener("visibilitychange", hide);
-    };
-  }, []);
+  }, [release]);
+  useMediaCleanup(release, stop);
+
   async function start() {
-    if (pending || active) return;
+    if (pending || preview) return;
     if (!navigator.mediaDevices?.getUserMedia) {
-      setMessage("Caméra indisponible. Utilisez HTTPS ou localhost.");
+      setMessage("Caméra indisponible. Vous pouvez continuer sans caméra.");
       return;
     }
     const request = ++generation.current;
     setPending(true);
+    setMessage("Autorisation de la caméra en attente…");
     try {
       const acquired = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user" },
         audio: false,
       });
-      // Permission may resolve after navigation, cancellation, or a hidden tab.
       if (request !== generation.current) {
         acquired.getTracks().forEach((track) => track.stop());
         return;
       }
       stream.current = acquired;
-      if (video.current) video.current.srcObject = acquired;
-      setActive(true);
+      const tracks = acquired.getTracks();
+      const ended = () => {
+        stop();
+        setMessage("Aperçu arrêté. Vous pouvez continuer sans caméra.");
+      };
+      tracks.forEach((track) => track.addEventListener("ended", ended));
+      removeEndedListener.current = () => {
+        tracks.forEach((track) => track.removeEventListener("ended", ended));
+      };
+      setPreview(acquired);
       setMessage("Aperçu local · Aucune transmission");
     } catch {
-      if (request === generation.current)
+      if (request === generation.current) {
+        release();
+        setPending(false);
         setMessage(
-          "Accès refusé ou caméra indisponible. Vous pouvez continuer sans caméra.",
+          "Caméra indisponible ou accès refusé. Vous pouvez continuer sans caméra.",
         );
+      }
     } finally {
       if (request === generation.current) setPending(false);
     }
   }
-  return (
-    <section>
-      <h3>Caméra facultative</h3>
-      <div className="camera-box">
-        <video ref={video} autoPlay playsInline muted hidden={!active} />
-        <span hidden={active}>Caméra éteinte</span>
-      </div>
-      <p role="status" className="subtle">
-        {message}
-      </p>
-      <div className="actions">
-        <button
-          className="btn secondary"
-          disabled={active || pending}
-          onClick={start}
-        >
-          {pending ? "Autorisation en attente…" : "Activer la caméra"}
-        </button>
-        <button
-          className="btn ghost"
-          disabled={!active && !pending}
-          onClick={stop}
-        >
-          Éteindre
-        </button>
-      </div>
-      <p className="subtle">
-        Aperçu uniquement. Aucune capture, analyse ou transmission d’image.
-        Quitter l’exercice coupe la caméra.
-      </p>
-    </section>
-  );
+
+  return { preview, pending, message, start, stop };
 }

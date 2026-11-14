@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { basePath } from "@/lib/base-path";
-import { activities, type Activity } from "@/domain/curriculum";
+import { activities } from "@/domain/curriculum";
 import {
   initialState,
   transition,
@@ -9,7 +9,7 @@ import {
   type LessonAction,
 } from "@/domain/learner";
 import { loadLearner, saveLearner, STORAGE_KEY } from "@/lib/learner-storage";
-import { CameraPreview, SpeechInput, playEnglish } from "./media-tools";
+import { TutorSession } from "./tutor-session";
 type View = "home" | "lesson" | "progress";
 function download(value: string, name: string) {
   const url = URL.createObjectURL(
@@ -29,6 +29,7 @@ export function LearningApp() {
   const [warning, setWarning] = useState("");
   const [view, setView] = useState<View>("home");
   const [feedback, setFeedback] = useState("");
+  const [captions, setCaptions] = useState(true);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     let loaded;
@@ -78,30 +79,14 @@ export function LearningApp() {
   useEffect(() => {
     if (ready) heading.current?.focus();
   }, [view, state.index, ready]);
-  useEffect(() => {
-    const stop = () => {
-      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-    };
-    const hide = () => {
-      if (document.hidden) stop();
-    };
-    window.addEventListener("pagehide", stop);
-    document.addEventListener("visibilitychange", hide);
-    return () => {
-      stop();
-      window.removeEventListener("pagehide", stop);
-      document.removeEventListener("visibilitychange", hide);
-    };
-  }, []);
   function navigate(next: View) {
-    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     setFeedback("");
+    if (next === "lesson" && view !== "lesson") setCaptions(true);
     setView(next);
   }
   function act(action: LessonAction) {
     const result = transition(current.current, action);
     if (result.state !== current.current) {
-      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
       current.current = result.state;
       setState(result.state);
       if (writable.current) {
@@ -141,6 +126,22 @@ export function LearningApp() {
     navigate("home");
   }
   const activity = activities[state.index];
+  if (ready && view === "lesson" && activity) {
+    return (
+      <TutorSession
+        key={activity.id}
+        activity={activity}
+        attempts={state.attempts[activity.id] ?? 0}
+        feedback={feedback}
+        warning={warning}
+        captions={captions}
+        onToggleCaptions={() => setCaptions(!captions)}
+        onAction={act}
+        onExit={() => navigate("home")}
+        headingRef={heading}
+      />
+    );
+  }
   return (
     <>
       <a className="skip-link" href="#main">
@@ -243,52 +244,40 @@ export function LearningApp() {
                   </div>
                 </section>
               )}
-              {view === "lesson" &&
-                (state.completed ? (
-                  <section className="hero">
-                    <div className="lesson-hero">
-                      <h1 ref={heading} tabIndex={-1}>
-                        Première séance terminée !
-                      </h1>
-                      <p>
-                        Vous avez exploré les présentations. Vous pouvez
-                        reprendre ces échanges à votre rythme.
-                      </p>
-                      <div className="actions">
-                        <button
-                          className="btn"
-                          onClick={() => act({ type: "restart" })}
-                        >
-                          Pratiquer à nouveau
-                        </button>
-                        <button
-                          className="btn secondary"
-                          onClick={() => navigate("progress")}
-                        >
-                          Voir mes progrès
-                        </button>
-                      </div>
+              {view === "lesson" && state.completed && (
+                <section className="hero">
+                  <div className="lesson-hero">
+                    <h1 ref={heading} tabIndex={-1}>
+                      Première séance terminée !
+                    </h1>
+                    <p>
+                      Vous avez exploré les présentations. Vous pouvez reprendre
+                      ces échanges à votre rythme.
+                    </p>
+                    <div className="actions">
+                      <button
+                        className="btn"
+                        onClick={() => act({ type: "restart" })}
+                      >
+                        Pratiquer à nouveau
+                      </button>
+                      <button
+                        className="btn secondary"
+                        onClick={() => navigate("progress")}
+                      >
+                        Voir mes progrès
+                      </button>
                     </div>
-                    <div className="panel">
-                      <h2>Ce n’est pas un score final.</h2>
-                      <p className="muted">
-                        La mémorisation à long terme, la prononciation et une
-                        conversation spontanée restent à explorer.
-                      </p>
-                    </div>
-                  </section>
-                ) : (
-                  <Lesson
-                    key={activity.id}
-                    activity={activity}
-                    index={state.index}
-                    attempts={state.attempts[activity.id] ?? 0}
-                    feedback={feedback}
-                    onAction={act}
-                    onFeedback={setFeedback}
-                    headingRef={heading}
-                  />
-                ))}
+                  </div>
+                  <div className="panel">
+                    <h2>Ce n’est pas un score final.</h2>
+                    <p className="muted">
+                      La mémorisation à long terme, la prononciation et une
+                      conversation spontanée restent à explorer.
+                    </p>
+                  </div>
+                </section>
+              )}
               {view === "progress" && (
                 <>
                   <h1 ref={heading} tabIndex={-1}>
@@ -410,170 +399,6 @@ function Progress({ index }: { index: number }) {
         className="progress-fill"
         style={{ width: `${(index / activities.length) * 100}%` }}
       />
-    </div>
-  );
-}
-function Lesson({
-  activity: a,
-  index,
-  attempts,
-  feedback,
-  onAction,
-  onFeedback,
-  headingRef,
-}: {
-  activity: Activity;
-  index: number;
-  attempts: number;
-  feedback: string;
-  onAction: (action: LessonAction) => void;
-  onFeedback: (message: string) => void;
-  headingRef: React.RefObject<HTMLHeadingElement | null>;
-}) {
-  const [french, setFrench] = useState(true);
-  const [showPhrase, setShowPhrase] = useState(true);
-  const [helpUsed, setHelpUsed] = useState(true);
-  const [response, setResponse] = useState<string | number>("");
-  const scaffold = attempts >= 2;
-  const translationVisible = french || scaffold;
-  return (
-    <div className="lesson-layout">
-      <section className="panel lesson-card">
-        <div className="step-row">
-          <span className="eyebrow">
-            Activité {index + 1} sur {activities.length}
-          </span>
-          <span className="subtle">Prenez votre temps</span>
-        </div>
-        <Progress index={index} />
-        <h1 ref={headingRef} tabIndex={-1} lang="en">
-          {a.title}
-        </h1>
-        <p className="muted">
-          {a.type === "choice"
-            ? "Écoutez ou lisez, puis choisissez la bonne réponse."
-            : "Présentez-vous en anglais. Vous pouvez parler ou écrire."}
-        </p>
-        <p lang="en" className="subtle">
-          {a.instruction}
-        </p>
-        <div className="word-card">
-          <button
-            className="listen-btn"
-            aria-label="Écouter en anglais"
-            onClick={() => playEnglish(a.prompt, onFeedback)}
-          >
-            ▶
-          </button>
-          <div className="phrase" lang="en">
-            {showPhrase || scaffold ? a.prompt : "Listen carefully…"}
-          </div>
-          {translationVisible && <div className="translation">{a.french}</div>}
-        </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onAction({
-              type: "answer",
-              activityId: a.id,
-              response,
-              assisted: translationVisible || helpUsed,
-            });
-          }}
-        >
-          {a.type === "choice" ? (
-            <div className="options" role="group" aria-label="Votre réponse">
-              {a.options.map((option, i) => (
-                <button
-                  type="button"
-                  key={option.label}
-                  className="option"
-                  lang="en"
-                  aria-pressed={response === i}
-                  onClick={() => setResponse(i)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <>
-              <label htmlFor="answer">Votre réponse en anglais</label>
-              <input
-                id="answer"
-                lang="en"
-                className="textarea"
-                autoComplete="off"
-                maxLength={500}
-                value={response}
-                onChange={(e) => setResponse(e.target.value)}
-                placeholder="Hello, my name is…"
-              />
-            </>
-          )}
-          <div role="status">
-            {feedback && <p className="feedback">{feedback}</p>}
-          </div>
-          <div className="actions">
-            <button className="btn" type="submit">
-              Vérifier ma réponse →
-            </button>
-            <button
-              className="btn secondary"
-              type="button"
-              onClick={() => {
-                setFrench(true);
-                setHelpUsed(true);
-                onFeedback(
-                  `En français : ${a.french} Réessayez à votre rythme.`,
-                );
-              }}
-            >
-              J’ai besoin d’aide
-            </button>
-          </div>
-        </form>
-        {a.type === "speak" && <SpeechInput onText={setResponse} />}
-      </section>
-      <aside className="panel">
-        <h3>Vos outils</h3>
-        <label className="toggle-line">
-          <input
-            type="checkbox"
-            checked={translationVisible}
-            disabled={scaffold}
-            onChange={(e) => {
-              setFrench(e.target.checked);
-              if (e.target.checked) setHelpUsed(true);
-            }}
-          />
-          Traduction française
-        </label>
-        <label className="toggle-line">
-          <input
-            type="checkbox"
-            checked={showPhrase || scaffold}
-            disabled={scaffold}
-            onChange={(e) => setShowPhrase(e.target.checked)}
-          />
-          Afficher le texte anglais
-        </label>
-        <button
-          className="btn secondary"
-          onClick={() => playEnglish(a.prompt, onFeedback)}
-        >
-          Réécouter
-        </button>
-        <div className="divider" />
-        <CameraPreview />
-        <div className="divider" />
-        <button
-          className="btn ghost"
-          onClick={() => onAction({ type: "skip", activityId: a.id })}
-        >
-          Passer sans évaluation →
-        </button>
-      </aside>
     </div>
   );
 }

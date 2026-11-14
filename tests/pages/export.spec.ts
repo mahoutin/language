@@ -10,12 +10,25 @@ test("Pages export loads assets, preserves lessons and scopes offline support", 
   });
   await page.goto("/language/");
   await page.getByRole("button", { name: "Commencer la leçon" }).click();
+  for (const asset of [
+    "tutor-portrait.webp",
+    "tutor/self-view-head.svg",
+    "tutor/self-view-shoulders.svg",
+  ]) {
+    expect((await request.get(`/language/assets/${asset}`)).ok()).toBe(true);
+  }
+  await expect(page.getByText("Portrait d’illustration")).toBeVisible();
+  await expect(
+    page.locator('img[src$="/tutor-portrait.webp"]'),
+  ).toHaveJSProperty("complete", true);
   await page
-    .getByRole("button", { name: "Introducing himself", exact: true })
+    .getByRole("radio", { name: "Introducing himself", exact: true })
     .click();
   await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
   await expect(
-    page.getByRole("heading", { name: "Understand a question" }),
+    page.getByRole("heading", {
+      name: "Qu’est-ce que cette personne vous demande ?",
+    }),
   ).toBeVisible();
   const manifest = await (
     await request.get("/language/manifest.webmanifest")
@@ -31,7 +44,9 @@ test("Pages export loads assets, preserves lessons and scopes offline support", 
   await page.reload();
   await page.getByRole("button", { name: "Continuer la leçon" }).click();
   await expect(
-    page.getByRole("heading", { name: "Understand a question" }),
+    page.getByRole("heading", {
+      name: "Qu’est-ce que cette personne vous demande ?",
+    }),
   ).toBeVisible();
   expect(failures).toEqual([]);
   await context.setOffline(true);
