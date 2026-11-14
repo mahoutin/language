@@ -32,16 +32,20 @@ Browser tests run against the production build on port 3100. CI performs the sam
 
 ## Current behavior
 
-- The original listening, understanding, introduction, reading and transfer prompts, in order.
-- French instructions, replay/slow TTS, French help, retry/scaffolding, skip and repeat.
+- One scripted tutoring conversation led by "Daniel", a **simulation**: French welcome → model line → meaning checks → learner's turn → repair → transfer (Maria, then Alex) → careful recap. No AI, no live video, and the voice is the browser's speech synthesis. See [Phase 1B review](docs/PHASE_1B_REVIEW.md).
+- The original listening, understanding, introduction, reading and transfer activities, in order, with their original ids and heuristic checks.
+- English and French guidance from the start. Captions (spoken English text) and Aide (French explanation) are separate controls.
+- Thinking time is never an outcome. Explicit Pause releases audio, microphone and camera and keeps the learner's draft. The learner can interrupt, replay, slow down, ask for French help or say "Je ne comprends pas"; none of these is recorded as an error.
+- Repair changes method (slower audio + French → fewer options / sentence frame → a non-scored diagnostic choice) instead of repeating itself.
 - Browser speech recognition only after per-exercise opt-in, with typing always available. Browser providers may process audio remotely. This is not live AI voice or pronunciation assessment.
-- Optional camera preview with cleanup on navigation, cancellation and tab hiding. No capture, upload, analysis or facial inference.
-- Validated local evidence and resumption; no persisted answer text, raw audio or video. Export original/current records and delete local progress.
+- Optional camera preview with cleanup on navigation, cancellation and tab hiding. No capture, upload, analysis or facial inference. Nothing (microphone, camera, audio) starts on page load.
+- Validated local evidence and resumption; no persisted answer text, raw audio or video. Evidence notes whether an answer was typed or recognised. Export original/current records and delete local progress.
 - Installable manifest, local icons and a public offline fallback. Previously open lessons work without a network, except browser audio services may require one. Reloading offline shows the fallback rather than the lesson. Full offline lesson precaching is not yet implemented.
 
 ## Structure
 
 - `src/domain`: versioned content, assessment and deterministic lesson transitions; independent of React and providers.
+- `src/domain/conversation`: the pure conversation driver (typed events, `step()` reducer, scripted copy, repair ladders, recap). It proposes `commit` effects; only `learner.ts` changes progress.
 - `src/lib`: validated storage adapter and browser speech types.
 - `src/components`: learner interface and lifecycle-scoped media controls.
 - `src/app`: Next routes, metadata, manifest, error boundary and CSS.
