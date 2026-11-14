@@ -16,6 +16,10 @@ const evidenceSchema = z
     assisted: z.boolean(),
     at: z.iso.datetime(),
     responseType: z.enum(["choice", "speak"]).optional(),
+    // Added in Phase 1B, optional so every earlier v1/v2 record stays valid.
+    // A typed answer and one produced by browser speech recognition (then
+    // confirmed by the learner) are different observations.
+    modality: z.enum(["typed", "browser-recognition"]).optional(),
   })
   .refine(
     (e) => activities.find((a) => a.id === e.activityId)?.skill === e.skill,
@@ -58,6 +62,7 @@ export type LessonAction =
       activityId: string;
       response: string | number;
       assisted: boolean;
+      modality?: "typed" | "browser-recognition";
     }
   | { type: "skip"; activityId: string }
   | { type: "restart" };
@@ -127,6 +132,9 @@ export function transition(
           assisted: action.type === "answer" && action.assisted,
           at,
           responseType: activity.type,
+          ...(action.type === "answer" && action.modality
+            ? { modality: action.modality }
+            : {}),
         },
       ].slice(-10000),
     },
