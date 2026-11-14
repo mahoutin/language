@@ -10,6 +10,10 @@ test("Pages export loads assets, preserves lessons and scopes offline support", 
   });
   await page.goto("/language/");
   await page.getByRole("button", { name: "Commencer la leçon" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Bonjour, je suis Daniel." }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Commencer", exact: true }).click();
   for (const asset of [
     "tutor-portrait.webp",
     "tutor/self-view-head.svg",
@@ -21,10 +25,11 @@ test("Pages export loads assets, preserves lessons and scopes offline support", 
   await expect(
     page.locator('img[src$="/tutor-portrait.webp"]'),
   ).toHaveJSProperty("complete", true);
+  await page.getByRole("button", { name: "Continuer", exact: true }).click();
   await page
     .getByRole("radio", { name: "Introducing himself", exact: true })
     .click();
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
+  await page.getByRole("button", { name: "Répondre" }).click();
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",
@@ -43,6 +48,7 @@ test("Pages export loads assets, preserves lessons and scopes offline support", 
   expect(new URL(scope).pathname).toBe("/language/");
   await page.reload();
   await page.getByRole("button", { name: "Continuer la leçon" }).click();
+  await page.getByRole("button", { name: "Commencer", exact: true }).click();
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",

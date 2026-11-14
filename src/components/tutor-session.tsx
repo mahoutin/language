@@ -3,22 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { basePath } from "@/lib/base-path";
-import type { Activity, Skill } from "@/domain/curriculum";
+import { activities } from "@/domain/curriculum";
+import { turnOpenPhases } from "@/domain/conversation/types";
 import type { LessonAction } from "@/domain/learner";
-import {
-  playEnglish,
-  SpeechInput,
-  useCameraPreview,
-  useMediaCleanup,
-} from "./media-tools";
+import { SpeechInput, useCameraPreview } from "./media-tools";
+import { TutorCard } from "./tutor-card";
+import { useConversation, type CommitResult } from "./use-conversation";
 import styles from "./tutor-session.module.css";
-
-const instructions: Record<Skill, string> = {
-  "listening-greetings": "Qu’est-ce que cette personne fait ?",
-  "listening-name-question": "Qu’est-ce que cette personne vous demande ?",
-  "speaking-introduction": "Présentez-vous en anglais, à l’oral ou à l’écrit.",
-  "reading-introduction": "Qui se présente ?",
-};
 
 function LocalPreview({ stream }: { stream: MediaStream }) {
   const video = useRef<HTMLVideoElement>(null);
@@ -34,72 +25,69 @@ function LocalPreview({ stream }: { stream: MediaStream }) {
 }
 
 export function TutorSession({
-  activity,
-  attempts,
-  feedback,
+  learner,
   warning,
-  captions,
-  onToggleCaptions,
-  onAction,
+  onCommit,
   onExit,
-  headingRef,
 }: {
-  activity: Activity;
-  attempts: number;
-  feedback: string;
+  learner: { index: number; completed: boolean };
   warning: string;
-  captions: boolean;
-  onToggleCaptions: () => void;
-  onAction: (action: LessonAction) => void;
+  onCommit: (action: LessonAction) => CommitResult;
   onExit: () => void;
-  headingRef: React.RefObject<HTMLHeadingElement | null>;
 }) {
-  const [help, setHelp] = useState(false);
-  const [dismissedHelpAt, setDismissedHelpAt] = useState<number>();
-  const [paused, setPaused] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const input = useRef<HTMLInputElement>(null);
   const [microphoneOpen, setMicrophoneOpen] = useState(false);
-  const [response, setResponse] = useState<string | number>("");
-  const [notice, setNotice] = useState("");
-  const stopPlayback = useRef<() => void>(() => {});
-  const stopAudio = useCallback(() => stopPlayback.current(), []);
-  useMediaCleanup(stopAudio, stopAudio);
+  const [hint, setHint] = useState("");
+  const recognitionTurn = useRef(0);
   const camera = useCameraPreview();
   const cameraRequested = Boolean(camera.preview) || camera.pending;
-  const helpVisible = help || (attempts >= 2 && dismissedHelpAt !== attempts);
-  const instruction =
-    activity.id === "transfer"
-      ? "Présentez-vous en anglais sans recopier un exemple."
-      : instructions[activity.skill];
 
-  function listen(rate: number) {
-    stopAudio();
-    setNotice("");
-    stopPlayback.current = playEnglish(activity.prompt, setNotice, rate);
-  }
+  const focus = useCallback((target: "heading" | "input") => {
+    // After React has committed the new content, so assistive tech reads the new text.
+    window.setTimeout(
+      () => (target === "heading" ? heading.current : input.current)?.focus(),
+      0,
+    );
+  }, []);
+  const stopRecognition = useCallback(() => setMicrophoneOpen(false), []);
+  const { state, send } = useConversation(learner, {
+    onCommit,
+    onExit,
+    focus,
+    stopRecognition,
+  });
+
+  const paused = state.lifecycle === "paused";
+  const speakTurn =
+    turnOpenPhases.has(state.phase) &&
+    state.phase !== "diagnostic_probe" &&
+    activities[state.activityIndex]?.type === "speak";
+  const helpAvailable =
+    state.phase !== "orientation" && state.phase !== "recap";
 
   function togglePause() {
-    if (!paused) {
-      stopAudio();
-      camera.stop();
-      setMicrophoneOpen(false);
-      setNotice("");
+    if (paused) {
+      send({ type: "resume_session" });
+      return;
     }
-    setPaused(!paused);
+    send({ type: "pause" });
+    camera.stop();
+    setMicrophoneOpen(false);
+    setHint("");
   }
 
   function toggleMicrophone() {
-    if (activity.type === "speak") {
-      stopAudio();
-      setMicrophoneOpen(!microphoneOpen);
-    } else
-      setNotice(
-        "Vous pourrez utiliser le microphone dans les activités où vous parlez.",
+    setHint("");
+    if (!speakTurn) {
+      setHint(
+        "Vous pourrez utiliser le microphone quand vous répondez à voix haute.",
       );
-  }
-
-  function toggleHelp() {
-    setHelp(!helpVisible);
-    if (helpVisible) setDismissedHelpAt(attempts);
+      return;
+    }
+    if (microphoneOpen && state.media === "learner_speaking")
+      send({ type: "recognition_ended" }, recognitionTurn.current);
+    setMicrophoneOpen(!microphoneOpen);
   }
 
   return (
@@ -118,7 +106,7 @@ export function TutorSession({
         <span className={styles.brand} lang="en">
           <strong>everyday</strong>english
         </span>
-        <span className={styles.badge}>Séance guidée</span>
+        <span className={styles.badge}>Séance guidée · simulation</span>
       </header>
 
       <aside className={styles.selfView} aria-label="Votre aperçu caméra">
@@ -156,126 +144,29 @@ export function TutorSession({
           </p>
         )}
         {paused ? (
-          <div className={styles.overlay} role="status">
-            <h1 id="tutor-activity">Séance en pause</h1>
-            <p>
+          <div className={styles.card} role="status">
+            <h1 id="tutor-activity" className={styles.instruction}>
+              Séance en pause
+            </h1>
+            <p className={styles.french}>
               Reprenez quand vous êtes prêt. Le micro et la caméra sont éteints.
+              Votre réponse est conservée.
             </p>
           </div>
         ) : (
-          <>
-            <div className={styles.overlay} data-help={helpVisible}>
-              <h1
-                id="tutor-activity"
-                ref={headingRef}
-                tabIndex={-1}
-                className={styles.instruction}
-              >
-                {instruction}
-              </h1>
-              <p
-                id="tutor-caption"
-                className={styles.caption}
-                lang="en"
-                hidden={!captions}
-              >
-                {activity.prompt}
-              </p>
-              <p className={styles.french}>
-                {!captions && <span lang="en">{activity.title}</span>}
-                {!captions && " · "}
-                <span>{activity.french}</span>
-              </p>
-              <div id="tutor-help" hidden={!helpVisible}>
-                <p className={styles.help} role="status">
-                  <strong>Aide en français</strong> ·{" "}
-                  {activity.type === "speak"
-                    ? "Dites votre prénom en anglais, puis vérifiez votre réponse."
-                    : "Relisez le sens en français ou écoutez la phrase plus lentement avant de répondre."}
-                </p>
-              </div>
-            </div>
-            <div
-              className={styles.replay}
-              aria-label="Lecture audio"
-              role="group"
-            >
-              <button type="button" onClick={() => listen(0.83)}>
-                Écouter
-              </button>
-              <button type="button" onClick={() => listen(0.65)}>
-                Écouter plus lentement
-              </button>
-            </div>
-            <form
-              className={styles.response}
-              onSubmit={(event) => {
-                event.preventDefault();
-                stopAudio();
-                setNotice("");
-                onAction({
-                  type: "answer",
-                  activityId: activity.id,
-                  response,
-                  assisted: true,
-                });
-              }}
-            >
-              {activity.type === "choice" ? (
-                <div
-                  className={styles.options}
-                  role="group"
-                  aria-label="Votre réponse"
-                >
-                  {activity.options.map((option, index) => (
-                    <label key={option.label} lang="en">
-                      <input
-                        type="radio"
-                        name="response"
-                        checked={response === index}
-                        onChange={() => setResponse(index)}
-                      />
-                      {option.label}
-                    </label>
-                  ))}
-                </div>
-              ) : (
-                <label className={styles.answer}>
-                  Votre réponse en anglais
-                  <input
-                    lang="en"
-                    autoComplete="off"
-                    maxLength={500}
-                    value={response}
-                    onChange={(event) => setResponse(event.target.value)}
-                  />
-                </label>
-              )}
-              <div className={styles.responseActions}>
-                <button className={styles.primary} type="submit">
-                  Vérifier ma réponse
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onAction({ type: "skip", activityId: activity.id })
-                  }
-                >
-                  Passer sans évaluation
-                </button>
-              </div>
-              <div className={styles.feedback} role="status">
-                {feedback}
-              </div>
-              <div className={styles.feedback} role="status">
-                {notice}
-              </div>
-            </form>
-          </>
+          <TutorCard
+            state={state}
+            send={send}
+            headingRef={heading}
+            inputRef={input}
+            hint={hint}
+          />
         )}
       </section>
 
-      <p className={styles.portraitLabel}>Portrait d’illustration</p>
+      <p className={styles.portraitLabel}>
+        Portrait d’illustration · dialogue préparé
+      </p>
       <div className={styles.dockArea}>
         <div
           className={styles.dock}
@@ -285,10 +176,8 @@ export function TutorSession({
           <button
             type="button"
             disabled={paused}
-            aria-expanded={
-              activity.type === "speak" ? microphoneOpen : undefined
-            }
-            aria-controls={activity.type === "speak" ? "tutor-mic" : undefined}
+            aria-expanded={speakTurn ? microphoneOpen : undefined}
+            aria-controls={speakTurn ? "tutor-mic" : undefined}
             onClick={toggleMicrophone}
           >
             <span aria-hidden="true">◉</span>Micro
@@ -305,17 +194,20 @@ export function TutorSession({
           <button
             type="button"
             disabled={paused}
-            aria-pressed={captions}
-            onClick={onToggleCaptions}
+            aria-pressed={state.prefs.captions}
+            onClick={() => send({ type: "captions_toggled" })}
           >
             <span aria-hidden="true">CC</span>Sous-titres
           </button>
           <button
             type="button"
-            disabled={paused}
-            aria-expanded={!paused && helpVisible}
-            aria-controls={paused ? undefined : "tutor-help"}
-            onClick={toggleHelp}
+            disabled={paused || !helpAvailable}
+            aria-expanded={
+              !paused && helpAvailable ? state.helpOpen : undefined
+            }
+            onClick={() =>
+              send({ type: state.helpOpen ? "help_dismissed" : "help_opened" })
+            }
           >
             <span aria-hidden="true">?</span>Aide
           </button>
@@ -323,7 +215,11 @@ export function TutorSession({
             <span aria-hidden="true">{paused ? "▶" : "Ⅱ"}</span>
             {paused ? "Reprendre" : "Pause"}
           </button>
-          <button className={styles.exit} type="button" onClick={onExit}>
+          <button
+            className={styles.exit}
+            type="button"
+            onClick={() => send({ type: "exit" })}
+          >
             <span aria-hidden="true">×</span>Quitter
           </button>
         </div>
@@ -333,7 +229,29 @@ export function TutorSession({
           aria-label="Réponse au microphone"
           hidden={!microphoneOpen}
         >
-          {microphoneOpen && <SpeechInput onText={setResponse} />}
+          {microphoneOpen && (
+            <SpeechInput
+              onText={(text) =>
+                send(
+                  { type: "draft_changed", text, source: "recognition" },
+                  recognitionTurn.current,
+                )
+              }
+              onListening={(listening) => {
+                if (listening) {
+                  recognitionTurn.current = state.turnId;
+                  send({ type: "recognition_started" });
+                } else
+                  send({ type: "recognition_ended" }, recognitionTurn.current);
+              }}
+              onFailure={(reason) =>
+                send(
+                  { type: "recognition_failed", reason },
+                  recognitionTurn.current,
+                )
+              }
+            />
+          )}
         </section>
       </div>
     </main>

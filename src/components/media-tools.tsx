@@ -2,25 +2,46 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserRecognition, SpeechWindow } from "@/lib/browser-media";
 
-export function playEnglish(
-  text: string,
-  onError: (message: string) => void,
-  rate: number,
-): () => void {
+export type SpeechPlayback = {
+  text: string;
+  lang: "en-US" | "fr-FR";
+  rate: number;
+  onStart: () => void;
+  onEnd: () => void;
+  onError: () => void;
+};
+
+/**
+ * Plays one line with the browser's voice (a labelled simulation, not a
+ * generated tutor voice). Reports start/end/error so the conversation reflects
+ * what the audio is ACTUALLY doing. Returns a stop function that silences the
+ * line and detaches every callback, so a cancelled line can never report late.
+ */
+export function playSpeech({
+  text,
+  lang,
+  rate,
+  onStart,
+  onEnd,
+  onError,
+}: SpeechPlayback): () => void {
   if (!("speechSynthesis" in window)) {
-    onError("La lecture audio est indisponible. Vous pouvez lire le texte.");
+    onError();
     return () => {};
   }
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "en-US";
+  utterance.lang = lang;
   utterance.rate = rate;
+  utterance.onstart = onStart;
+  utterance.onend = onEnd;
   utterance.onerror = (event) => {
-    if (event.error !== "interrupted" && event.error !== "canceled")
-      onError("Lecture audio indisponible. Vous pouvez lire le texte.");
+    if (event.error !== "interrupted" && event.error !== "canceled") onError();
   };
   window.speechSynthesis.speak(utterance);
   return () => {
+    utterance.onstart = null;
+    utterance.onend = null;
     utterance.onerror = null;
     window.speechSynthesis.cancel();
   };
@@ -43,7 +64,17 @@ export function useMediaCleanup(release: () => void, reset: () => void) {
 
 const speechIdle = "Vous pouvez toujours écrire votre réponse.";
 
-export function SpeechInput({ onText }: { onText: (text: string) => void }) {
+export type SpeechFailure = "denied" | "unavailable" | "no_speech" | "error";
+
+export function SpeechInput({
+  onText,
+  onListening,
+  onFailure,
+}: {
+  onText: (text: string) => void;
+  onListening?: (listening: boolean) => void;
+  onFailure?: (reason: SpeechFailure) => void;
+}) {
   const recognition = useRef<BrowserRecognition | null>(null);
   const [consent, setConsent] = useState(false);
   const [listening, setListening] = useState(false);
@@ -62,7 +93,17 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
     setListening(false);
     setStatus(speechIdle);
   }, [release]);
-  useMediaCleanup(release, stop);
+  const listeningChange = useRef(onListening);
+  const failure = useRef(onFailure);
+  useEffect(() => {
+    listeningChange.current = onListening;
+    failure.current = onFailure;
+  });
+  const stopReporting = useCallback(() => {
+    stop();
+    listeningChange.current?.(false);
+  }, [stop]);
+  useMediaCleanup(release, stopReporting);
 
   function start() {
     if (!consent) return;
@@ -90,6 +131,15 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
         if (recognition.current !== current) return;
         release();
         setListening(false);
+        failure.current?.(
+          error === "not-allowed" || error === "service-not-allowed"
+            ? "denied"
+            : error === "no-speech"
+              ? "no_speech"
+              : error === "audio-capture" || error === "network"
+                ? "unavailable"
+                : "error",
+        );
         setStatus(
           error === "not-allowed" || error === "service-not-allowed"
             ? "Le microphone n’est pas autorisé. Vous pouvez écrire votre réponse."
@@ -102,16 +152,19 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
         if (recognition.current !== current) return;
         recognition.current = null;
         setListening(false);
+        listeningChange.current?.(false);
         setStatus((message) =>
           message === "Je vous écoute…" ? speechIdle : message,
         );
       };
       current.start();
       setListening(true);
+      listeningChange.current?.(true);
       setStatus("Je vous écoute…");
     } catch {
       stop();
       setStatus("Le microphone ne démarre pas. Écrivez votre réponse.");
+      failure.current?.("unavailable");
     }
   }
 
@@ -123,7 +176,7 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
           checked={consent}
           onChange={(event) => {
             setConsent(event.target.checked);
-            if (!event.target.checked) stop();
+            if (!event.target.checked) stopReporting();
           }}
         />
         J’accepte la reconnaissance vocale du navigateur pour cet exercice.
@@ -132,7 +185,7 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
       <button
         type="button"
         disabled={!consent}
-        onClick={listening ? stop : start}
+        onClick={listening ? stopReporting : start}
       >
         {listening ? "Arrêter le microphone" : "Parler en anglais"}
       </button>

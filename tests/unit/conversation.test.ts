@@ -301,6 +301,22 @@ describe("interruption, replay and slower playback", () => {
     expect(run.conv.media).toBe("idle");
   });
 
+  it("asking for a moment while the tutor speaks stops the voice and opens thinking time", () => {
+    const run = new Run().goTo(2);
+    run.send({ type: "replay", slow: false });
+    const id = run.conv.output.id!;
+    run.send({ type: "audio_started", outputId: id });
+    expect(run.conv.media).toBe("tutor_speaking");
+    run.send({ type: "think_started" });
+    expect(run.conv).toMatchObject({ media: "thinking_pause" });
+    expect(run.conv.output.id).toBeNull();
+    expect(hasEffect(run.last, "stop_audio")).toBe(true);
+    expect(run.send({ type: "audio_ended", outputId: id }).ignored).toBe(
+      "invalid_in_state",
+    );
+    expect(run.conv.media).toBe("thinking_pause");
+  });
+
   it("repeat and slower start NEW outputs at different rates without touching the draft", () => {
     const run = new Run().goTo(2).type("My name");
     run.send({ type: "replay", slow: false });
@@ -358,6 +374,27 @@ describe("interruption, replay and slower playback", () => {
     run.send({ type: "audio_ended", outputId: run.conv.output.id! });
     expect(run.learner.index).toBe(index);
     expect(run.conv.activityIndex).toBe(1);
+  });
+});
+
+describe("recognised text belongs to its own turn", () => {
+  it("drops recognised text that arrives after the turn moved on, but keeps typed text", () => {
+    const run = new Run().goTo(2);
+    const listeningTurn = run.conv.turnId;
+    run.type("Yes please").submit(); // repair opens a new turn
+    const before = run.conv;
+    const late = step(run.conv, {
+      type: "draft_changed",
+      text: "My name is Late",
+      source: "recognition",
+      eventId: "late-asr",
+      sessionId: "s1",
+      turnId: listeningTurn,
+    });
+    expect(late.ignored).toBe("invalid_in_state");
+    expect(late.state).toBe(before);
+    run.type("My name is Alex");
+    expect(run.conv.draft.text).toBe("My name is Alex");
   });
 });
 
@@ -494,6 +531,7 @@ describe("response kinds are distinct outcomes", () => {
       media: "recovering",
       notice: "microphone_denied",
     });
+    expect(hasEffect(run.last, "stop_recognition")).toBe(true);
     expect(run.learner).toBe(before);
     // No progress entry was even created: a device failure leaves no trace in the activity.
     expect(run.conv.progress["say-name"]).toBeUndefined();

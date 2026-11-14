@@ -336,6 +336,9 @@ function handle(
 
     case "draft_changed": {
       if (!turnOpen || s.media === "processing") return null;
+      // Recognised text belongs to the turn in which listening began.
+      if (event.source === "recognition" && event.turnId !== s.turnId)
+        return null;
       const draft: Draft = {
         text: event.text ?? s.draft.text,
         choice: event.choice === undefined ? s.draft.choice : event.choice,
@@ -562,12 +565,29 @@ function handle(
     case "think_started": {
       if (!turnOpen) return null;
       if (
-        !["listening_open", "learner_speaking", "interrupted"].includes(s.media)
+        ![
+          "listening_open",
+          "learner_speaking",
+          "interrupted",
+          "tutor_speaking",
+        ].includes(s.media)
       )
         return null;
+      // Asking for a moment while the tutor talks simply stops the voice.
+      const effects: Effect[] =
+        s.media === "learner_speaking"
+          ? [{ type: "stop_recognition" }]
+          : s.media === "tutor_speaking"
+            ? [{ type: "stop_audio" }]
+            : [];
       return unchanged(
-        { ...s, media: "thinking_pause", feedback: "thinking" },
-        s.media === "learner_speaking" ? [{ type: "stop_recognition" }] : [],
+        {
+          ...s,
+          media: "thinking_pause",
+          feedback: "thinking",
+          output: { id: null, rate: s.output.rate },
+        },
+        effects,
       );
     }
 
@@ -680,14 +700,20 @@ function handle(
           feedback: "no_speech",
         });
       }
-      return unchanged({
-        ...s,
-        media: "recovering",
-        notice:
-          event.reason === "denied"
-            ? "microphone_denied"
-            : "microphone_unavailable",
-      });
+      // A hard microphone failure closes the speech panel (aborting recognition
+      // and revoking its per-exercise consent). The card's notice is then the
+      // single message, and typing remains available.
+      return unchanged(
+        {
+          ...s,
+          media: "recovering",
+          notice:
+            event.reason === "denied"
+              ? "microphone_denied"
+              : "microphone_unavailable",
+        },
+        [{ type: "stop_recognition" }],
+      );
     }
 
     case "recover": {

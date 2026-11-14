@@ -116,61 +116,186 @@
 }
 
 .lesson {
-  display: grid;
-  justify-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: flex-end;
   gap: 0.5rem;
   width: min(100% - 2rem, 50rem);
-  margin: auto auto 0;
-  padding-top: clamp(11rem, 36svh, 23rem);
+  margin: 0 auto;
+  padding-top: 0.5rem;
 }
 
-.overlay,
-.response,
+.card,
 .warning {
   width: 100%;
   border: 1px solid #90b5a05e;
   border-radius: 1.25rem;
   background: #102b26f5;
-  padding: 0.85rem clamp(0.85rem, 2.5vw, 1.5rem);
+  padding: 0.75rem clamp(0.85rem, 2.5vw, 1.5rem) 0.85rem;
   box-shadow: 0 12px 36px #04100c33;
 }
 
-.overlay[data-help="true"] {
-  color: #112c25;
+/* One card; the pale "Aide" variant (Figma 6:154) swaps these tokens so every
+   control inside keeps its contrast. */
+.card {
+  --fg: var(--ink);
+  --fg-soft: var(--soft-ink);
+  --surface: #25433c;
+  --surface-hover: #365c50;
+  --surface-border: #93baa38c;
+  --accent: #e4f2e7;
+  --accent-ink: #132e26;
+  display: grid;
+  gap: 0.45rem;
+  color: var(--fg);
+}
+.card[data-help="true"] {
+  --fg: #112c25;
+  --fg-soft: #245a47;
+  --surface: #dcebe0;
+  --surface-hover: #c6dccd;
+  --surface-border: #6e9a83;
+  --accent: #195d49;
+  --accent-ink: #ffffff;
   background: #f4f8f0;
 }
-
-.overlay p,
-.overlay h1 {
+.card h1,
+.card p,
+.card h2 {
   margin: 0;
 }
-.overlay h1 {
-  margin-bottom: 0.35rem;
-  font-size: 1.45rem;
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--fg-soft);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+.card[data-media="tutor_speaking"] .dot,
+.card[data-media="learner_speaking"] .dot {
+  background: #5ed39a;
+  box-shadow: 0 0 0 3px #5ed39a55;
+}
+.card[data-media="thinking_pause"] .dot,
+.card[data-media="interrupted"] .dot {
+  background: #f5dc97;
+}
+.card[data-media="recovering"] .dot {
+  background: #f0a79f;
+}
+.card h1.instruction {
+  font-size: clamp(1.1rem, 1.9vw, 1.45rem);
+  font-weight: 700;
   letter-spacing: normal;
+  line-height: 1.25;
 }
-.overlay p + p {
-  margin-top: 0.2rem;
+.card h1:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
-.overlay .instruction {
-  font-size: 1rem;
+.lead {
+  color: var(--fg-soft);
+  font-size: 0.95rem;
+}
+.lines {
+  display: grid;
+  gap: 0.2rem;
+}
+.captionRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.75rem;
+}
+.captionText {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.55rem;
+}
+.speaker {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 1rem;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 0.78rem;
   font-weight: 650;
+  vertical-align: middle;
 }
 .caption {
   font-size: clamp(1.2rem, 2.15vw, 1.8rem);
   font-weight: 650;
+  line-height: 1.2;
 }
 .french {
-  color: var(--soft-ink);
+  color: var(--fg-soft);
   font-size: 1.05rem;
 }
-.overlay[data-help="true"] .french {
-  color: #245a47;
+.context,
+.caveat {
+  color: var(--fg-soft);
+  font-size: 0.92rem;
 }
-.overlay .help {
-  border-top: 1px solid #c0d2c5;
-  margin-top: 0.55rem;
-  padding-top: 0.55rem;
+.help {
+  border-top: 1px solid var(--surface-border);
+  padding-top: 0.45rem;
+}
+.frame {
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.8rem;
+  background: var(--surface);
+}
+.messages {
+  display: grid;
+  gap: 0.3rem;
+}
+.messages:empty {
+  display: none;
+}
+.feedback {
+  color: var(--fg-soft);
+  font-weight: 550;
+}
+.feedback:empty {
+  display: none;
+}
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 0.8rem;
+  background: var(--surface);
+}
+.recap h2 {
+  margin-top: 0.35rem;
+  font-size: 1rem;
+}
+.recap ul {
+  margin: 0.15rem 0 0.35rem;
+  padding-left: 1.2rem;
+}
+.recap {
+  max-height: min(34svh, 15rem);
+  overflow-y: auto;
 }
 
 .replay,
@@ -185,17 +310,17 @@
 
 .stage button {
   min-height: 44px;
-  border: 1px solid #93baa38c;
+  border: 1px solid var(--surface-border, #93baa38c);
   border-radius: 999px;
   padding: 0.35rem 0.9rem;
-  color: var(--ink);
-  background: #25433c;
+  color: var(--surface-ink, var(--fg, var(--ink)));
+  background: var(--surface, #25433c);
   font-size: 0.92rem;
   font-weight: 600;
 }
 
 .stage button:hover:not(:disabled) {
-  background: #365c50;
+  background: var(--surface-hover, #365c50);
 }
 .stage button:disabled {
   opacity: 0.6;
@@ -204,29 +329,39 @@
   outline: 3px solid #f5dc97;
   outline-offset: 3px;
 }
-.overlay h1:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 2px;
-}
 .stage button[aria-pressed="true"],
 .stage .primary {
-  background: #e4f2e7;
-  color: #132e26;
-  border-color: #e4f2e7;
+  background: var(--accent, #e4f2e7);
+  color: var(--accent-ink, #132e26);
+  border-color: var(--accent, #e4f2e7);
 }
-.stage :is(button[aria-pressed="true"], .primary):hover {
-  background: #fff;
+.stage :is(button[aria-pressed="true"], .primary):hover:not(:disabled) {
+  background: var(--accent-hover, #fff);
+}
+.card[data-help="true"] .primary:hover:not(:disabled) {
+  background: #0f4a3a;
 }
 
 .response {
   display: grid;
-  gap: 0.55rem;
-  padding-block: 0.55rem;
+  gap: 0.5rem;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.actions .replay {
+  display: contents;
 }
 .options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
+}
+.options[data-count="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .options label {
   display: flex;
@@ -235,15 +370,15 @@
   min-width: 0;
   min-height: 44px;
   padding: 0.35rem 0.65rem;
-  border: 1px solid #93baa38c;
+  border: 1px solid var(--surface-border);
   border-radius: 0.8rem;
-  background: #25433c;
+  background: var(--surface);
   overflow-wrap: anywhere;
   cursor: pointer;
 }
 .options label:has(:checked) {
-  background: #e4f2e7;
-  color: #132e26;
+  background: var(--accent);
+  color: var(--accent-ink);
 }
 .options input {
   accent-color: #195d49;
@@ -264,17 +399,13 @@
   border-radius: 0.65rem;
   padding: 0.4rem 0.65rem;
 }
-.feedback {
-  color: var(--soft-ink);
-}
-.feedback:empty {
-  display: none;
-}
 .warning {
   margin: 0;
 }
 
 .dockArea {
+  position: sticky;
+  bottom: 0;
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -337,12 +468,6 @@
   flex: 0 0 19px;
 }
 
-@media (max-height: 760px) and (min-width: 761px) {
-  .lesson {
-    padding-top: 30svh;
-  }
-}
-
 @media (max-width: 960px) {
   .portraitLabel {
     position: static;
@@ -353,16 +478,22 @@
 
 @media (max-width: 600px) {
   .selfView {
-    top: 4.7rem;
-    width: 8.5rem;
+    top: 4.4rem;
+    width: 7.25rem;
+  }
+  .selfViewLabel {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.45rem;
   }
   .selfViewHead {
     top: 7%;
   }
+  /* Reserve the tile's space so the card never sits underneath it. */
   .lesson {
-    padding-top: max(9rem, 26svh);
+    padding-top: 8.9rem;
   }
-  .options {
+  .options,
+  .options[data-count="2"] {
     grid-template-columns: 1fr;
   }
   .dock {

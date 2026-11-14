@@ -10,6 +10,7 @@ import {
 } from "@/domain/learner";
 import { loadLearner, saveLearner, STORAGE_KEY } from "@/lib/learner-storage";
 import { TutorSession } from "./tutor-session";
+import type { CommitResult } from "./use-conversation";
 type View = "home" | "lesson" | "progress";
 function download(value: string, name: string) {
   const url = URL.createObjectURL(
@@ -28,8 +29,6 @@ export function LearningApp() {
   const [ready, setReady] = useState(false);
   const [warning, setWarning] = useState("");
   const [view, setView] = useState<View>("home");
-  const [feedback, setFeedback] = useState("");
-  const [captions, setCaptions] = useState(true);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     let loaded;
@@ -80,13 +79,14 @@ export function LearningApp() {
     if (ready) heading.current?.focus();
   }, [view, state.index, ready]);
   function navigate(next: View) {
-    setFeedback("");
-    if (next === "lesson" && view !== "lesson") setCaptions(true);
     setView(next);
   }
-  function act(action: LessonAction) {
-    const result = transition(current.current, action);
-    if (result.state !== current.current) {
+  // The learning engine stays authoritative: the conversation proposes an action
+  // and learns from this result whether (and how) the learner record changed.
+  function act(action: LessonAction): CommitResult {
+    const before = current.current;
+    const result = transition(before, action);
+    if (result.state !== before) {
       current.current = result.state;
       setState(result.state);
       if (writable.current) {
@@ -102,7 +102,14 @@ export function LearningApp() {
         }
       }
     }
-    setFeedback(result.feedback);
+    const evidence = result.state.evidence.at(-1);
+    return {
+      advanced: result.state.index > before.index,
+      correct:
+        result.state.evidence.length > before.evidence.length &&
+        Boolean(evidence?.correct),
+      rejected: action.type !== "restart" && result.state === before,
+    };
   }
   function clear() {
     if (
@@ -125,20 +132,13 @@ export function LearningApp() {
     setState(current.current);
     navigate("home");
   }
-  const activity = activities[state.index];
-  if (ready && view === "lesson" && activity) {
+  if (ready && view === "lesson") {
     return (
       <TutorSession
-        key={activity.id}
-        activity={activity}
-        attempts={state.attempts[activity.id] ?? 0}
-        feedback={feedback}
+        learner={{ index: state.index, completed: state.completed }}
         warning={warning}
-        captions={captions}
-        onToggleCaptions={() => setCaptions(!captions)}
-        onAction={act}
+        onCommit={act}
         onExit={() => navigate("home")}
-        headingRef={heading}
       />
     );
   }
@@ -240,40 +240,6 @@ export function LearningApp() {
                     </div>
                     <p className="subtle">
                       Ce sont des observations, pas une preuve de maîtrise.
-                    </p>
-                  </div>
-                </section>
-              )}
-              {view === "lesson" && state.completed && (
-                <section className="hero">
-                  <div className="lesson-hero">
-                    <h1 ref={heading} tabIndex={-1}>
-                      Première séance terminée !
-                    </h1>
-                    <p>
-                      Vous avez exploré les présentations. Vous pouvez reprendre
-                      ces échanges à votre rythme.
-                    </p>
-                    <div className="actions">
-                      <button
-                        className="btn"
-                        onClick={() => act({ type: "restart" })}
-                      >
-                        Pratiquer à nouveau
-                      </button>
-                      <button
-                        className="btn secondary"
-                        onClick={() => navigate("progress")}
-                      >
-                        Voir mes progrès
-                      </button>
-                    </div>
-                  </div>
-                  <div className="panel">
-                    <h2>Ce n’est pas un score final.</h2>
-                    <p className="muted">
-                      La mémorisation à long terme, la prononciation et une
-                      conversation spontanée restent à explorer.
                     </p>
                   </div>
                 </section>

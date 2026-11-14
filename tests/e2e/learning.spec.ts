@@ -1,41 +1,48 @@
 import { test, expect } from "@playwright/test";
+import {
+  answer,
+  beginConversation,
+  openLesson,
+  pickAndAnswer,
+  stubSpeech,
+} from "./helpers";
 const key = "everyday-english-v1";
 test("full lesson, resumption, export, repeat and erasure", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Commencer la leçon" }).click();
-  await page
-    .getByRole("radio", { name: "Introducing himself", exact: true })
-    .click();
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
+  await stubSpeech(page, { autoEnd: true });
+  await beginConversation(page);
+  await page.getByRole("button", { name: "Continuer", exact: true }).click();
+  await pickAndAnswer(page, "Introducing himself");
   await page.reload();
   await page.getByRole("button", { name: "Continuer la leçon" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Content de vous revoir !" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Commencer", exact: true }).click();
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",
     }),
   ).toBeVisible();
-  await page.getByRole("radio", { name: "Your name", exact: true }).click();
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
+  await pickAndAnswer(page, "Your name");
   await page.getByLabel("Votre réponse en anglais").fill("I'm Alex");
-  await page.getByRole("button", { name: "Aide" }).click();
+  await page.getByRole("button", { name: "Aide", exact: true }).click();
   await expect(page.getByLabel("Votre réponse en anglais")).toHaveValue(
     "I'm Alex",
   );
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
-  await page.getByRole("radio", { name: "Maria", exact: true }).click();
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
+  await answer(page).click();
+  await pickAndAnswer(page, "Maria");
   await page
     .getByLabel("Votre réponse en anglais")
     .fill("Hello, my name is Alex");
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
+  await answer(page).click();
   await expect(
-    page.getByRole("heading", { name: "Première séance terminée !" }),
+    page.getByRole("heading", { name: "Merci pour cette séance !" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Pratiquer à nouveau" }).click();
   await expect(
-    page.getByRole("heading", { name: "Qu’est-ce que cette personne fait ?" }),
+    page.getByRole("heading", { name: "Écoutez Daniel se présenter." }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Quitter" }).click();
   await page.getByRole("button", { name: "Mes progrès", exact: true }).click();
@@ -58,27 +65,30 @@ test("full lesson, resumption, export, repeat and erasure", async ({
     await page.evaluate((key) => localStorage.getItem(key), key),
   ).toBeNull();
 });
-test("scaffolding, skip and invalid saved record protection", async ({
-  page,
-}) => {
+test("repair, skip and invalid saved record protection", async ({ page }) => {
+  await stubSpeech(page, { autoEnd: true });
   await page.addInitScript((key) => localStorage.setItem(key, "{broken"), key);
   await page.goto("/");
   await expect(
     page.getByRole("alert").filter({ hasText: "Les données enregistrées" }),
   ).toContainText("ne seront pas écrasées");
   await page.getByRole("button", { name: "Commencer la leçon" }).click();
+  await page.getByRole("button", { name: "Commencer", exact: true }).click();
+  await page.getByRole("button", { name: "Continuer", exact: true }).click();
   await expect(
     page.getByText("Aide en français", { exact: true }),
   ).toBeHidden();
-  await page.getByRole("radio", { name: "Ordering food", exact: true }).click();
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
+  await pickAndAnswer(page, "Ordering food");
+  // First miss: slower audio and the French meaning, not the same text again.
   await expect(
-    page.getByRole("status").filter({ hasText: "Essayez encore" }),
+    page.getByText("Écoutons plus lentement. En français"),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
   await expect(
     page.getByText("Aide en français", { exact: true }),
   ).toBeVisible();
+  await pickAndAnswer(page, "Ordering food");
+  // Second miss: a different method (fewer options).
+  await expect(page.getByRole("radio")).toHaveCount(2);
   await page.getByRole("button", { name: "Passer sans évaluation" }).click();
   await expect(
     page.getByRole("heading", {
@@ -174,6 +184,14 @@ test("navigation and tutor controls reflow at narrow CSS viewport widths", async
     ),
   ).toBe(true);
 
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Commencer", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Quitter" })).toBeInViewport();
+
   // Half the CSS viewport width and height of the 1280 × 720 laptop.
   await page.setViewportSize({ width: 640, height: 360 });
   await page.getByRole("button", { name: "Aide", exact: true }).click();
@@ -213,8 +231,9 @@ test("microphone requires consent and aborts on pause, permission loss, and exit
     }
     Object.assign(window, { SpeechRecognition: Recognition });
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Commencer la leçon" }).click();
+  await stubSpeech(page, { autoEnd: true });
+  await beginConversation(page);
+  await page.getByRole("button", { name: "Continuer", exact: true }).click();
   await page.getByRole("button", { name: "Passer sans évaluation" }).click();
   await page.getByRole("button", { name: "Passer sans évaluation" }).click();
   await page.getByRole("button", { name: "Micro", exact: true }).click();
@@ -248,11 +267,16 @@ test("microphone requires consent and aborts on pause, permission loss, and exit
   await page.evaluate(() =>
     (window as unknown as { revokeMicrophone: () => void }).revokeMicrophone(),
   );
+  // One clear message, recognition aborted, and typing stays available.
   await expect(
     page.getByText("Le microphone n’est pas autorisé.", { exact: false }),
-  ).toBeVisible();
-  await expect(speak).toBeEnabled();
+  ).toHaveCount(1);
   await expect.poll(stopped).toBe(2);
+  await expect(page.getByLabel("Réponse au microphone")).toBeHidden();
+  await page.getByRole("button", { name: "Écrire ma réponse" }).click();
+  await expect(page.getByLabel("Votre réponse en anglais")).toBeFocused();
+  await page.getByRole("button", { name: "Micro", exact: true }).click();
+  await consent.check();
   await speak.click();
   await page.getByRole("button", { name: "Quitter" }).click();
   await expect.poll(stopped).toBe(3);
@@ -316,8 +340,9 @@ test("storage failure permits practice without a crash", async ({ page }) => {
       throw new DOMException("Quota exceeded", "QuotaExceededError");
     };
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Commencer la leçon" }).click();
+  await stubSpeech(page, { autoEnd: true });
+  await beginConversation(page);
+  await page.getByRole("button", { name: "Continuer", exact: true }).click();
   await page.getByRole("button", { name: "Passer sans évaluation" }).click();
   await expect(
     page.getByRole("heading", {
@@ -332,9 +357,11 @@ test("storage failure permits practice without a crash", async ({ page }) => {
 test("bilingual guidance, captions, help and explicit pause stay independent", async ({
   page,
 }) => {
+  await stubSpeech(page, { autoEnd: true });
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Commencer la leçon" }).click();
+  await page.clock.install();
+  await beginConversation(page);
+  await page.getByRole("button", { name: "Continuer", exact: true }).click();
   const captions = page.getByRole("button", { name: "Sous-titres" });
   const help = page.getByRole("button", { name: "Aide", exact: true });
   const pause = page.getByRole("button", { name: "Pause", exact: true });
@@ -353,9 +380,11 @@ test("bilingual guidance, captions, help and explicit pause stay independent", a
   await expect(context).toBeVisible();
   await expect(captions).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByText("Portrait d’illustration")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Quitter" })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Quitter" })).toBeInViewport({
+    ratio: 1,
+  });
 
-  await page.clock.install();
+  // A long silence is not an outcome: no pause, no error, no failed attempt.
   await page.clock.fastForward(60_000);
   await expect(
     page.getByRole("heading", { name: "Séance en pause" }),
@@ -363,7 +392,7 @@ test("bilingual guidance, captions, help and explicit pause stay independent", a
   await expect(
     page.getByRole("heading", { name: "Qu’est-ce que cette personne fait ?" }),
   ).toBeVisible();
-  await expect(page.getByText(/Essayez encore/)).toHaveCount(0);
+  await expect(page.getByText(/Ce n’est pas encore ça/)).toHaveCount(0);
 
   await page.getByRole("radio", { name: "Introducing himself" }).check();
   await pause.focus();
@@ -382,7 +411,7 @@ test("bilingual guidance, captions, help and explicit pause stay independent", a
   ).toBeChecked();
   await expect(context).toBeVisible();
   await expect(english).toBeHidden();
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
+  await answer(page).click();
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",
@@ -400,8 +429,9 @@ test("camera denial leaves the guided lesson usable", async ({ page }) => {
       },
     });
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Commencer la leçon" }).click();
+  await stubSpeech(page, { autoEnd: true });
+  await beginConversation(page);
+  await page.getByRole("button", { name: "Continuer", exact: true }).click();
   const camera = page.getByRole("button", { name: "Caméra", exact: true });
   await expect(camera).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByText("La caméra est éteinte.")).toBeVisible();
@@ -411,8 +441,7 @@ test("camera denial leaves the guided lesson usable", async ({ page }) => {
     page.getByText(/Vous pouvez continuer sans caméra/),
   ).toBeVisible();
   await expect(camera).toHaveAttribute("aria-pressed", "false");
-  await page.getByRole("radio", { name: "Introducing himself" }).check();
-  await page.getByRole("button", { name: "Vérifier ma réponse" }).click();
+  await pickAndAnswer(page, "Introducing himself");
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",
@@ -423,13 +452,14 @@ test("camera denial leaves the guided lesson usable", async ({ page }) => {
 test("video-first shell and review screenshots at the two laptop sizes", async ({
   page,
 }, testInfo) => {
+  await stubSpeech(page, { autoEnd: true });
   for (const [width, height] of [
     [1440, 900],
     [1280, 720],
   ]) {
     await page.setViewportSize({ width, height });
-    await page.goto("/");
-    await page.getByRole("button", { name: "Commencer la leçon" }).click();
+    await openLesson(page);
+    await page.getByRole("button", { name: "Commencer", exact: true }).click();
     const portrait = page.locator('img[src$="/tutor-portrait.webp"]');
     await expect
       .poll(() =>
