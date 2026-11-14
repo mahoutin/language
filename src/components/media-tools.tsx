@@ -86,10 +86,16 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
         onText(event.results[0][0].transcript.slice(0, 500));
         setStatus("Vérifiez le texte reconnu avant de répondre.");
       };
-      current.onerror = () => {
+      current.onerror = ({ error }) => {
         if (recognition.current !== current) return;
+        release();
+        setListening(false);
         setStatus(
-          "Microphone indisponible ou parole non reconnue. Écrivez votre réponse.",
+          error === "not-allowed" || error === "service-not-allowed"
+            ? "Le microphone n’est pas autorisé. Vous pouvez écrire votre réponse."
+            : error === "no-speech"
+              ? "Vous pouvez reprendre quand vous êtes prêt ou écrire votre réponse."
+              : "La reconnaissance vocale est indisponible. Vous pouvez écrire votre réponse.",
         );
       };
       current.onend = () => {
@@ -177,14 +183,15 @@ export function useCameraPreview() {
         return;
       }
       stream.current = acquired;
-      const track = acquired.getVideoTracks()[0];
+      const tracks = acquired.getTracks();
       const ended = () => {
         stop();
         setMessage("Aperçu arrêté. Vous pouvez continuer sans caméra.");
       };
-      track?.addEventListener("ended", ended);
-      removeEndedListener.current = () =>
-        track?.removeEventListener("ended", ended);
+      tracks.forEach((track) => track.addEventListener("ended", ended));
+      removeEndedListener.current = () => {
+        tracks.forEach((track) => track.removeEventListener("ended", ended));
+      };
       setPreview(acquired);
       setMessage("Aperçu local · Aucune transmission");
     } catch {

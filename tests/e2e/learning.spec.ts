@@ -175,16 +175,21 @@ test("mobile navigation stays labeled and fits the viewport", async ({
   ).toBe(true);
 });
 
-test("microphone requires consent and aborts when leaving an exercise", async ({
+test("microphone requires consent and aborts on pause, permission loss, and exit", async ({
   page,
 }) => {
   await page.addInitScript(() => {
+    let stopped = 0;
     class Recognition {
+      onerror: ((event: { error: string }) => void) | null = null;
       start() {
-        Object.assign(window, { micStarted: true });
+        Object.assign(window, {
+          micStarted: true,
+          revokeMicrophone: () => this.onerror?.({ error: "not-allowed" }),
+        });
       }
       abort() {
-        Object.assign(window, { micStopped: true });
+        Object.assign(window, { microphonesStopped: ++stopped });
       }
     }
     Object.assign(window, { SpeechRecognition: Recognition });
@@ -197,23 +202,93 @@ test("microphone requires consent and aborts when leaving an exercise", async ({
   await expect(
     page.getByRole("button", { name: "Parler en anglais" }),
   ).toBeDisabled();
-  await page
-    .getByLabel(
-      "J’accepte la reconnaissance vocale du navigateur pour cet exercice.",
-    )
-    .check();
-  await page.getByRole("button", { name: "Parler en anglais" }).click();
+  const consent = page.getByLabel(
+    "J’accepte la reconnaissance vocale du navigateur pour cet exercice.",
+  );
+  const speak = page.getByRole("button", { name: "Parler en anglais" });
+  const stopped = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { microphonesStopped: number })
+          .microphonesStopped,
+    );
+  await consent.check();
+  await speak.click();
   expect(
     await page.evaluate(
       () => (window as unknown as { micStarted: boolean }).micStarted,
     ),
   ).toBe(true);
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect.poll(stopped).toBe(1);
+  await page.getByRole("button", { name: "Reprendre" }).click();
+  await page.getByRole("button", { name: "Micro", exact: true }).click();
+  await expect(speak).toBeDisabled();
+  await consent.check();
+  await speak.click();
+  await page.evaluate(() =>
+    (window as unknown as { revokeMicrophone: () => void }).revokeMicrophone(),
+  );
+  await expect(
+    page.getByText("Le microphone n’est pas autorisé.", { exact: false }),
+  ).toBeVisible();
+  await expect(speak).toBeEnabled();
+  await expect.poll(stopped).toBe(2);
+  await speak.click();
   await page.getByRole("button", { name: "Quitter" }).click();
-  expect(
-    await page.evaluate(
-      () => (window as unknown as { micStopped: boolean }).micStopped,
-    ),
-  ).toBe(true);
+  await expect.poll(stopped).toBe(3);
+});
+
+test("all camera tracks stop on pause, permission loss, and exit", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const getUserMedia = () => {
+      const canvas = document.createElement("canvas");
+      const stream = canvas.captureStream();
+      const source = stream.getVideoTracks()[0];
+      const tracks = [source, source.clone()];
+      stream.addTrack(tracks[1]);
+      Object.assign(window, { tutorTracks: tracks });
+      return Promise.resolve(stream);
+    };
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+      value: getUserMedia,
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Commencer la leçon" }).click();
+  const camera = page.getByRole("button", { name: "Caméra", exact: true });
+  const preview = page.getByText("Aperçu local · Aucune transmission");
+  const trackStates = () =>
+    page.evaluate(() =>
+      (
+        window as unknown as { tutorTracks: MediaStreamTrack[] }
+      ).tutorTracks.map((track) => track.readyState),
+    );
+  await camera.click();
+  await expect(preview).toBeVisible();
+  expect(await trackStates()).toEqual(["live", "live"]);
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect.poll(trackStates).toEqual(["ended", "ended"]);
+  await page.getByRole("button", { name: "Reprendre" }).click();
+  await expect(page.getByText("La caméra est éteinte.")).toBeVisible();
+  await camera.click();
+  await expect(preview).toBeVisible();
+  await page.evaluate(() => {
+    const [, track] = (window as unknown as { tutorTracks: MediaStreamTrack[] })
+      .tutorTracks;
+    track.stop();
+    track.dispatchEvent(new Event("ended"));
+  });
+  await expect(
+    page.getByText("Aperçu arrêté.", { exact: false }),
+  ).toBeVisible();
+  await expect.poll(trackStates).toEqual(["ended", "ended"]);
+  await camera.click();
+  await expect(preview).toBeVisible();
+  await page.getByRole("button", { name: "Quitter" }).click();
+  await expect.poll(trackStates).toEqual(["ended", "ended"]);
 });
 
 test("storage failure permits practice without a crash", async ({ page }) => {
