@@ -360,6 +360,9 @@ test("video-first shell and review screenshots at the two laptop sizes", async (
       await expect(
         page.getByText("Aide en français", { exact: true }),
       ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Quitter" }),
+      ).toBeInViewport({ ratio: 1 });
       const help = testInfo.outputPath("tutor-french-help.png");
       await page.screenshot({ path: help, animations: "disabled" });
       await testInfo.attach("Tutor French help", {
