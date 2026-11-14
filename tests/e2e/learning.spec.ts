@@ -37,6 +37,7 @@ test("full lesson, resumption, export, repeat and erasure", async ({
   await expect(
     page.getByRole("heading", { name: "Qu’est-ce que cette personne fait ?" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Quitter" }).click();
   await page.getByRole("button", { name: "Mes progrès", exact: true }).click();
   const download = page.waitForEvent("download");
   await page
@@ -278,8 +279,8 @@ test("bilingual guidance, captions, help and explicit pause stay independent", a
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Caméra" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Reprendre" })).toBeFocused();
-  await expect(
-    page.evaluate((storageKey) => localStorage.getItem(storageKey), key),
+  expect(
+    await page.evaluate((storageKey) => localStorage.getItem(storageKey), key),
   ).toBeNull();
   await page.keyboard.press("Enter");
   await expect(
