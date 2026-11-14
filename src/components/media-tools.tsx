@@ -137,10 +137,9 @@ export function SpeechInput({ onText }: { onText: (text: string) => void }) {
 
 export function useCameraPreview() {
   const stream = useRef<MediaStream | null>(null);
-  const video = useRef<HTMLVideoElement | null>(null);
   const generation = useRef(0);
   const removeEndedListener = useRef<(() => void) | null>(null);
-  const [active, setActive] = useState(false);
+  const [preview, setPreview] = useState<MediaStream | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("La caméra est éteinte.");
 
@@ -150,21 +149,17 @@ export function useCameraPreview() {
     removeEndedListener.current = null;
     stream.current?.getTracks().forEach((track) => track.stop());
     stream.current = null;
-    if (video.current) video.current.srcObject = null;
-  }, []);
-  const attachVideo = useCallback((element: HTMLVideoElement | null) => {
-    video.current = element;
   }, []);
   const stop = useCallback(() => {
     release();
-    setActive(false);
+    setPreview(null);
     setPending(false);
     setMessage("La caméra est éteinte.");
   }, [release]);
   useMediaCleanup(release, stop);
 
   async function start() {
-    if (pending || active) return;
+    if (pending || preview) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       setMessage("Caméra indisponible. Vous pouvez continuer sans caméra.");
       return;
@@ -182,7 +177,6 @@ export function useCameraPreview() {
         return;
       }
       stream.current = acquired;
-      if (video.current) video.current.srcObject = acquired;
       const track = acquired.getVideoTracks()[0];
       const ended = () => {
         stop();
@@ -191,7 +185,7 @@ export function useCameraPreview() {
       track?.addEventListener("ended", ended);
       removeEndedListener.current = () =>
         track?.removeEventListener("ended", ended);
-      setActive(true);
+      setPreview(acquired);
       setMessage("Aperçu local · Aucune transmission");
     } catch {
       if (request === generation.current) {
@@ -206,5 +200,5 @@ export function useCameraPreview() {
     }
   }
 
-  return { active, pending, message, attachVideo, start, stop };
+  return { preview, pending, message, start, stop };
 }

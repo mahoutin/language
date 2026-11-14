@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { basePath } from "@/lib/base-path";
 import type { Activity, Skill } from "@/domain/curriculum";
@@ -20,11 +20,26 @@ const instructions: Record<Skill, string> = {
   "reading-introduction": "Qui se présente ?",
 };
 
+function LocalPreview({ stream }: { stream: MediaStream }) {
+  const video = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const element = video.current;
+    if (!element) return;
+    element.srcObject = stream;
+    return () => {
+      element.srcObject = null;
+    };
+  }, [stream]);
+  return <video ref={video} autoPlay playsInline muted />;
+}
+
 export function TutorSession({
   activity,
   attempts,
   feedback,
   warning,
+  captions,
+  onToggleCaptions,
   onAction,
   onExit,
   headingRef,
@@ -33,11 +48,12 @@ export function TutorSession({
   attempts: number;
   feedback: string;
   warning: string;
+  captions: boolean;
+  onToggleCaptions: () => void;
   onAction: (action: LessonAction) => void;
   onExit: () => void;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
 }) {
-  const [captions, setCaptions] = useState(true);
   const [help, setHelp] = useState(false);
   const [dismissedHelpAt, setDismissedHelpAt] = useState<number>();
   const [paused, setPaused] = useState(false);
@@ -48,6 +64,7 @@ export function TutorSession({
   const stopAudio = useCallback(() => stopPlayback.current(), []);
   useMediaCleanup(stopAudio, stopAudio);
   const camera = useCameraPreview();
+  const cameraRequested = Boolean(camera.preview) || camera.pending;
   const helpVisible = help || (attempts >= 2 && dismissedHelpAt !== attempts);
   const instruction =
     activity.id === "transfer"
@@ -105,14 +122,9 @@ export function TutorSession({
       </header>
 
       <aside className={styles.selfView} aria-label="Votre aperçu caméra">
-        <video
-          ref={camera.attachVideo}
-          autoPlay
-          playsInline
-          muted
-          hidden={!camera.active}
-        />
-        {!camera.active && (
+        {camera.preview ? (
+          <LocalPreview stream={camera.preview} />
+        ) : (
           <div className={styles.selfViewIllustration} aria-hidden="true">
             <Image
               className={styles.selfViewHead}
@@ -285,10 +297,8 @@ export function TutorSession({
             type="button"
             disabled={paused}
             aria-label="Caméra"
-            aria-pressed={camera.active || camera.pending}
-            onClick={
-              camera.active || camera.pending ? camera.stop : camera.start
-            }
+            aria-pressed={cameraRequested}
+            onClick={cameraRequested ? camera.stop : camera.start}
           >
             <span aria-hidden="true">▣</span>Caméra
           </button>
@@ -296,7 +306,7 @@ export function TutorSession({
             type="button"
             disabled={paused}
             aria-pressed={captions}
-            onClick={() => setCaptions(!captions)}
+            onClick={onToggleCaptions}
           >
             <span aria-hidden="true">CC</span>Sous-titres
           </button>

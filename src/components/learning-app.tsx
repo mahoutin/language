@@ -29,6 +29,7 @@ export function LearningApp() {
   const [warning, setWarning] = useState("");
   const [view, setView] = useState<View>("home");
   const [feedback, setFeedback] = useState("");
+  const [captions, setCaptions] = useState(true);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     let loaded;
@@ -80,6 +81,7 @@ export function LearningApp() {
   }, [view, state.index, ready]);
   function navigate(next: View) {
     setFeedback("");
+    if (next === "lesson" && view !== "lesson") setCaptions(true);
     setView(next);
   }
   function act(action: LessonAction) {
@@ -132,6 +134,8 @@ export function LearningApp() {
         attempts={state.attempts[activity.id] ?? 0}
         feedback={feedback}
         warning={warning}
+        captions={captions}
+        onToggleCaptions={() => setCaptions(!captions)}
         onAction={act}
         onExit={() => navigate("home")}
         headingRef={heading}

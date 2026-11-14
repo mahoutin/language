@@ -293,6 +293,7 @@ test("bilingual guidance, captions, help and explicit pause stay independent", a
       name: "Qu’est-ce que cette personne vous demande ?",
     }),
   ).toBeFocused();
+  await expect(captions).toHaveAttribute("aria-pressed", "false");
 });
 
 test("camera denial leaves the guided lesson usable", async ({ page }) => {
