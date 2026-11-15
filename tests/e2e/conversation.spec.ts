@@ -1,6 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
-  answer,
+  askForAMoment,
+  finishSpeech,
+  skipStep,
+  submitAnswer,
   beginConversation,
   endSpeech,
   openLesson,
@@ -92,28 +95,44 @@ test.describe("one scripted conversation", () => {
     await expect(
       status(page, "Daniel parle (voix simulée du navigateur)"),
     ).toBeVisible();
-    expect((await spoken(page)).at(-1)).toMatchObject({
-      text: "Hello! My name is Daniel.",
-      lang: "en-US",
-    });
+    // Daniel speaks in a sequence: French lead-in first, then the English line.
+    await finishSpeech(page);
+    const heard = await spoken(page);
+    expect(heard.slice(0, 2)).toMatchObject([
+      { text: "Écoutez Daniel se présenter.", lang: "fr-FR" },
+      { text: "Hello! My name is Daniel.", lang: "en-US" },
+    ]);
     await page.getByRole("button", { name: "Continuer", exact: true }).click();
 
     // First meaning check: one miss, then the right answer.
     await pickAndAnswer(page, "Ordering food");
     await expect(page.getByText("Écoutons plus lentement")).toBeVisible();
-    expect((await spoken(page)).at(-1)).toMatchObject({ rate: 0.65 });
+    await finishSpeech(page);
+    expect(await spoken(page)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: "Hello! My name is Daniel.",
+          lang: "en-US",
+          rate: 0.65,
+        }),
+      ]),
+    );
     await pickAndAnswer(page, "Introducing himself");
 
     // Daniel asks the question, with an acknowledgement of the previous step.
     await expect(
       page.getByText("Oui, Daniel se présente.", { exact: false }),
     ).toBeVisible();
-    expect((await spoken(page)).at(-1)).toMatchObject({
-      text: "What is your name?",
-    });
+    // The acknowledgement is spoken in French, then the question in English.
+    await finishSpeech(page);
+    const heard2 = await spoken(page);
+    const question = heard2.findIndex((l) => l.text === "What is your name?");
+    expect(question).toBeGreaterThan(0);
+    expect(heard2[question]).toMatchObject({ lang: "en-US", rate: 0.83 });
+    expect(heard2[question - 1].lang).toBe("fr-FR");
     await pickAndAnswer(page, "Your name");
     // Daniel's line finishes; the turn is then open for the learner.
-    await endSpeech(page, (await spoken(page)).length - 1);
+    await finishSpeech(page);
 
     // The learner's turn.
     await expect(
@@ -126,17 +145,17 @@ test.describe("one scripted conversation", () => {
 
     // Repair ladder: three genuinely different methods.
     await field(page).fill("Yes please");
-    await answer(page).click();
+    await submitAnswer(page);
     await expect(page.getByText("Écoutons plus lentement")).toBeVisible();
     await expect(
       page.getByText("Aide en français", { exact: true }),
     ).toBeVisible();
-    await answer(page).click();
+    await submitAnswer(page);
     await expect(
       page.getByText("Essayons autrement avec un exemple à compléter."),
     ).toBeVisible();
     await expect(page.getByText("My name is …")).toBeVisible();
-    await answer(page).click();
+    await submitAnswer(page);
     await expect(
       page.getByRole("heading", { name: /Quelle phrase répond à/ }),
     ).toBeVisible();
@@ -151,7 +170,7 @@ test.describe("one scripted conversation", () => {
     expect(await evidenceCount(page)).toBe(evidenceBeforeProbe); // the probe is not an attempt
     await expect(page.getByText("Bien vu.", { exact: false })).toBeVisible();
     await field(page).fill("My name is Alex");
-    await answer(page).click();
+    await submitAnswer(page);
 
     // Transfer: a new speaker and wording, no example on display, empty field.
     await expect(
@@ -173,11 +192,11 @@ test.describe("one scripted conversation", () => {
     await expect(field(page)).toHaveValue("");
     await expect(page.getByText("My name is …")).toHaveCount(0);
     await field(page).fill("I'm Alex");
-    await answer(page).click();
+    await submitAnswer(page);
 
     // Natural conclusion: careful recap, no mastery claim.
     await expect(
-      page.getByRole("heading", { name: "Merci pour cette séance !" }),
+      page.getByRole("heading", { name: /Merci pour cette séance/ }),
     ).toBeVisible();
     await expect(page.getByText("Nous avons pratiqué")).toBeVisible();
     await expect(
@@ -224,20 +243,20 @@ test.describe("one scripted conversation", () => {
     await toLearnerTurn(page);
     const before = await evidenceCount(page);
     await field(page).fill("Alex");
-    await answer(page).click();
+    await submitAnswer(page);
     await expect(
       page.getByText("J’ai compris un mot", { exact: false }),
     ).toBeVisible();
     await field(page).fill("12 !!");
-    await answer(page).click();
+    await submitAnswer(page);
     // A second non-answer changes the method instead of repeating the same message.
     await expect(page.getByText("Écoutons plus lentement")).toBeVisible();
     expect(await evidenceCount(page)).toBe(before);
     // An actual wrong answer IS an observation; a skip is its own outcome.
     await field(page).fill("Yes please");
-    await answer(page).click();
+    await submitAnswer(page);
     expect(await evidenceCount(page)).toBe(before + 1);
-    await page.getByRole("button", { name: "Passer sans évaluation" }).click();
+    await skipStep(page);
     const last = (await storedRecord(page)).evidence.at(-1);
     expect(last).toMatchObject({
       activityId: "say-name",
@@ -252,7 +271,7 @@ test.describe("one scripted conversation", () => {
     await stubSpeech(page, { autoEnd: true });
     await toLearnerTurn(page);
     await field(page).fill("I'm Alex");
-    await answer(page).click();
+    await submitAnswer(page);
     await expect(
       page.getByText("Hello, I am Maria. Nice to meet you."),
     ).toBeVisible();
@@ -268,12 +287,19 @@ test.describe("thinking time and explicit pause", () => {
     await toLearnerTurn(page);
     const before = await storedRecord(page);
     await expect(status(page, "Daniel parle")).toBeVisible();
-    await endSpeech(page, (await spoken(page)).length - 1);
+    await finishSpeech(page);
     // The turn is now open and the 30 s check-in timer is armed.
     await expect(status(page, "À vous. Prenez votre temps.")).toBeVisible();
     await page.clock.fastForward(29_000);
     await expect(status(page, "À vous. Prenez votre temps.")).toBeVisible();
     await page.clock.fastForward(2_000);
+    // Daniel quietly offers help aloud, once, in French; afterwards it is still thinking time.
+    await expect(status(page, "Daniel parle")).toBeVisible();
+    expect((await spoken(page)).at(-1)).toMatchObject({
+      text: "Je suis toujours là. Prenez votre temps.",
+      lang: "fr-FR",
+    });
+    await finishSpeech(page);
     await expect(
       status(page, "Vous réfléchissez : pas de souci"),
     ).toBeVisible();
@@ -305,7 +331,7 @@ test.describe("thinking time and explicit pause", () => {
     await stubSpeech(page, { autoEnd: true });
     await toLearnerTurn(page);
     await field(page).fill("My na");
-    await page.getByRole("button", { name: "J’ai besoin d’un moment" }).click();
+    await askForAMoment(page);
     await expect(
       status(page, "Vous réfléchissez : pas de souci"),
     ).toBeVisible();
@@ -461,7 +487,7 @@ test.describe("devices and fallbacks", () => {
       page.getByText("Reconnaissance vocale indisponible", { exact: false }),
     ).toBeVisible();
     await field(page).fill("My name is Alex");
-    await answer(page).click();
+    await submitAnswer(page);
     await expect(
       page.getByText("Hello, I am Maria. Nice to meet you."),
     ).toBeVisible();
@@ -498,7 +524,7 @@ test.describe("devices and fallbacks", () => {
     await expect(field(page)).toBeFocused();
     expect(await evidenceCount(page)).toBe(before);
     await field(page).fill("I'm Alex");
-    await answer(page).click();
+    await submitAnswer(page);
     await expect(
       page.getByText("Hello, I am Maria. Nice to meet you."),
     ).toBeVisible();
@@ -540,10 +566,10 @@ test.describe("devices and fallbacks", () => {
     await expect(
       page.getByText("Vérifiez le texte reconnu", { exact: false }),
     ).toBeVisible();
-    await answer(page).click();
+    await submitAnswer(page);
     await pickAndAnswer(page, "Maria");
     await field(page).fill("I'm Alex");
-    await answer(page).click();
+    await submitAnswer(page);
     const speak = (await storedRecord(page)).evidence.filter(
       (e: { responseType: string }) => e.responseType === "speak",
     );
@@ -563,7 +589,7 @@ test.describe("devices and fallbacks", () => {
       page.getByText(/Vous pouvez continuer sans caméra/),
     ).toBeVisible();
     await field(page).fill("My name is Alex");
-    await answer(page).click();
+    await submitAnswer(page);
     await expect(
       page.getByText("Hello, I am Maria. Nice to meet you."),
     ).toBeVisible();
@@ -622,10 +648,10 @@ test.describe("learner records and curriculum are protected", () => {
     await stubSpeech(page, { autoEnd: true });
     await toLearnerTurn(page);
     await field(page).fill("I'm Alex");
-    await answer(page).click();
+    await submitAnswer(page);
     await pickAndAnswer(page, "Maria");
     await field(page).fill("I'm Alex");
-    await answer(page).click();
+    await submitAnswer(page);
     const done = await storedRecord(page);
     await page.getByRole("button", { name: "Terminer la séance" }).click();
     await page.getByRole("button", { name: /Revoir la séance/ }).click();
@@ -645,7 +671,7 @@ test.describe("learner records and curriculum are protected", () => {
 });
 
 test.describe("keyboard and accessible names", () => {
-  test("a meaning check can be answered with the keyboard alone", async ({
+  test("a meaning check can be answered with the keyboard alone (Enter, and Space)", async ({
     page,
   }) => {
     await stubSpeech(page, { autoEnd: true });
@@ -658,19 +684,29 @@ test.describe("keyboard and accessible names", () => {
         name: "Qu’est-ce que cette personne fait ?",
       }),
     ).toBeFocused();
-    await page.getByRole("radio", { name: "Introducing himself" }).focus();
-    await page.keyboard.press("Space");
-    await expect(
-      page.getByRole("radio", { name: "Introducing himself" }),
-    ).toBeChecked();
+    // Options are buttons: arrow keys and Tab only move, they never answer.
+    const option = page.getByRole("button", {
+      name: "Introducing himself",
+      exact: true,
+    });
+    await option.focus();
+    await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Tab");
-    await expect(answer(page)).toBeFocused();
-    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("heading", {
+        name: "Qu’est-ce que cette personne fait ?",
+      }),
+    ).toBeVisible();
+    expect((await storedRecord(page))?.evidence ?? []).toHaveLength(0);
+    await page.waitForTimeout(450);
+    await option.focus();
+    await page.keyboard.press("Space");
     await expect(
       page.getByRole("heading", {
         name: "Qu’est-ce que cette personne vous demande ?",
       }),
     ).toBeFocused();
+    expect((await storedRecord(page)).evidence).toHaveLength(1);
   });
 
   test("every control has an accessible name and a visible focus ring", async ({
@@ -727,18 +763,22 @@ test.describe("narrow layout: the dock never covers instructional content", () =
       await toLearnerTurn(page);
       // Two misses: French help opens and the sentence frame appears.
       await field(page).fill("Yes please");
-      await answer(page).click();
-      await answer(page).click();
+      await submitAnswer(page);
+      await submitAnswer(page);
       await expect(
         page.getByText("Aide en français", { exact: true }),
       ).toBeVisible();
       await expect(page.getByText("My name is …")).toBeVisible();
 
+      await expect(status(page, "À vous. Prenez votre temps.")).toBeVisible();
       const dock = page.getByRole("group", { name: "Commandes de la séance" });
       const selfView = page.getByLabel("Votre aperçu caméra");
-      const controls = page.locator(
-        "section[aria-labelledby='tutor-activity'] button, section[aria-labelledby='tutor-activity'] input, section[aria-labelledby='tutor-activity'] h1",
-      );
+      // « Arrêter la voix » only exists while Daniel is speaking, so it is not part of the stable layout.
+      const controls = page
+        .locator(
+          "section[aria-labelledby='tutor-activity'] button, section[aria-labelledby='tutor-activity'] input, section[aria-labelledby='tutor-activity'] h1",
+        )
+        .filter({ hasNotText: "Arrêter la voix" });
       const count = await controls.count();
       expect(count).toBeGreaterThan(5);
       for (let i = 0; i < count; i++) {
@@ -830,13 +870,11 @@ test.describe("layout and review screenshots", () => {
       await pickAndAnswer(page, "Introducing himself");
       await pickAndAnswer(page, "Your name");
       await shot("06-learner-turn");
-      await page
-        .getByRole("button", { name: "J’ai besoin d’un moment" })
-        .click();
+      await askForAMoment(page);
       await shot("07-thinking-pause");
       for (let i = 0; i < 3; i++) {
         await field(page).fill("Yes please");
-        await answer(page).click();
+        await submitAnswer(page);
       }
       await shot("08-diagnostic-probe");
       await pickAndAnswer(page, "My name is Sam.");
@@ -845,12 +883,14 @@ test.describe("layout and review screenshots", () => {
       await shot("10-explicit-pause");
       await page.getByRole("button", { name: "Reprendre" }).click();
       await field(page).fill("My name is Alex");
-      await answer(page).click();
+      await submitAnswer(page);
+      await expect(page.getByText("Hello, I am Maria.")).toBeVisible();
+      await shot("11-maria-reading");
       await pickAndAnswer(page, "Maria");
-      await shot("11-transfer");
+      await shot("12-transfer");
       await field(page).fill("I'm Alex");
-      await answer(page).click();
-      await shot("12-recap");
+      await submitAnswer(page);
+      await shot("13-recap");
     });
   }
 });

@@ -1,14 +1,19 @@
 import { activities, assess, type Activity } from "../curriculum";
+import { buildRecap, type Recap } from "./summary";
 import type {
   ConversationState,
   FeedbackKey,
   MediaState,
   NoticeKey,
   PedagogicalPhase,
+  Segment,
+  Speaker,
   Step,
   Strategy,
 } from "./types";
 import { turnOpenPhases } from "./types";
+
+export type { Speaker } from "./types";
 
 /**
  * Scripted (non-AI) tutoring content for the Phase 1B simulation.
@@ -23,9 +28,72 @@ import { turnOpenPhases } from "./types";
  *    3     read-intro       Daniel introduces Maria → reading check
  *    4     transfer         Alex ("And you?") → introduce yourself in a changed situation
  *    5     (none)           recap
+ *
+ * Copy marks English phrases inside French text with <en>…</en>. One source
+ * then drives three things that must agree: the on-screen lang="en" markup, the
+ * spoken segments (so a French voice never reads English words), and the plain
+ * text used for tests. Everything Daniel says aloud is also on screen.
  */
 
-export type Speaker = "Daniel" | "Maria" | "Alex";
+// ---------- marked text ----------
+
+export type Span = { lang: "fr" | "en"; text: string };
+
+export function parseMarked(text: string): Span[] {
+  const spans: Span[] = [];
+  let last = 0;
+  for (const match of text.matchAll(/<en>([\s\S]*?)<\/en>/g)) {
+    if (match.index > last)
+      spans.push({ lang: "fr", text: text.slice(last, match.index) });
+    spans.push({ lang: "en", text: match[1] });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) spans.push({ lang: "fr", text: text.slice(last) });
+  return spans;
+}
+
+export const plainText = (text: string): string =>
+  parseMarked(text)
+    .map((span) => span.text)
+    .join("");
+
+// ---------- speech ----------
+
+export const EN_RATE = 0.83;
+export const EN_SLOW_RATE = 0.65;
+export const FR_RATE = 0.9;
+export const FR_SLOW_RATE = 0.75;
+
+const speakable = (text: string) =>
+  text.replace(/[«»]/g, " ").replace(/\s+/g, " ").trim();
+
+/** Marked text → spoken segments, each in its own language. English parts take `enRate`. */
+export function toSegments(
+  text: string,
+  speaker: Speaker = "Daniel",
+  enRate = EN_RATE,
+  frRate = FR_RATE,
+): Segment[] {
+  const out: Segment[] = [];
+  for (const span of parseMarked(text)) {
+    const spoken = speakable(span.text);
+    if (!/[\p{L}\p{N}]/u.test(spoken)) continue;
+    out.push(
+      span.lang === "en"
+        ? { text: spoken, lang: "en-US", rate: enRate, speaker }
+        : { text: spoken, lang: "fr-FR", rate: frRate, speaker: "Daniel" },
+    );
+  }
+  return out;
+}
+
+const englishLine = (
+  activity: Activity,
+  speaker: Speaker,
+  rate: number,
+): Segment => ({ text: activity.prompt, lang: "en-US", rate, speaker });
+
+// ---------- station copy ----------
 
 type StationCopy = {
   speaker: Speaker;
@@ -42,14 +110,14 @@ export const stations: Record<string, StationCopy> = {
     lead: "Écoutez Daniel se présenter.",
     instruction: "Qu’est-ce que cette personne fait ?",
     context: "Contexte : Daniel rencontre quelqu’un pour la première fois.",
-    help: "Daniel dit bonjour, puis donne son prénom. « My name is… » veut dire « Je m’appelle… ».",
-    ack: "Oui, Daniel se présente. « My name is… » veut dire « Je m’appelle… ».",
+    help: "Daniel dit bonjour, puis donne son prénom. « <en>My name is…</en> » veut dire « Je m’appelle… ».",
+    ack: "Oui, Daniel se présente. « <en>My name is…</en> » veut dire « Je m’appelle… ».",
   },
   "listen-question": {
     speaker: "Daniel",
     lead: "Daniel vous pose une question.",
     instruction: "Qu’est-ce que cette personne vous demande ?",
-    help: "« What is your name? » veut dire « Comment vous appelez-vous ? ». On vous demande votre prénom.",
+    help: "« <en>What is your name?</en> » veut dire « Comment vous appelez-vous ? ». On vous demande votre prénom.",
     ack: "Oui, il vous demande votre prénom. C’est bientôt à vous de répondre.",
   },
   "say-name": {
@@ -63,14 +131,14 @@ export const stations: Record<string, StationCopy> = {
     speaker: "Maria",
     lead: "Je vous présente Maria, une nouvelle personne. Lisez ce qu’elle dit.",
     instruction: "Qui se présente ?",
-    help: "« I am Maria » veut dire « Je suis Maria ». « Nice to meet you » veut dire « Enchantée ».",
+    help: "« <en>I am Maria</en> » veut dire « Je suis Maria ». « <en>Nice to meet you</en> » veut dire « Enchantée ».",
     ack: "Oui, c’est Maria. Voici maintenant une autre situation.",
   },
   transfer: {
     speaker: "Alex",
     lead: "Une nouvelle rencontre. Les mots changent, la situation reste la même.",
     instruction: "Présentez-vous en anglais sans recopier un exemple.",
-    help: "Alex se présente, puis demande : « And you? », c’est-à-dire « Et vous ? ». Répondez avec votre prénom.",
+    help: "Alex se présente, puis demande : « <en>And you?</en> », c’est-à-dire « Et vous ? ». Répondez avec votre prénom.",
     ack: "Merci ! C’était une situation différente.",
   },
 };
@@ -108,27 +176,28 @@ export const repairContent: Record<string, RepairContent> = {
   "say-name": {
     example: { model: "My name is Daniel.", frame: "My name is …" },
     probe: {
-      question: "Quelle phrase répond à « What is your name? » ?",
+      question: "Quelle phrase répond à « <en>What is your name?</en> » ?",
       options: [
         { label: "Goodbye!", correct: false },
         { label: "My name is Sam.", correct: true },
         { label: "Yes, please.", correct: false },
       ],
       explanation:
-        "On répond à « What is your name? » avec son prénom : « My name is… » ou « I’m… ».",
+        "On répond à « <en>What is your name?</en> » avec son prénom : « <en>My name is…</en> » ou « <en>I’m…</en> ».",
     },
   },
   transfer: {
     example: { model: "I’m Alex.", frame: "I’m …" },
     probe: {
-      question: "Alex demande « And you? ». Quelle phrase répond le mieux ?",
+      question:
+        "Alex demande « <en>And you?</en> ». Quelle phrase répond le mieux ?",
       options: [
         { label: "Nice weather.", correct: false },
         { label: "Yes, please.", correct: false },
         { label: "I’m Sam.", correct: true },
       ],
       explanation:
-        "« And you? » veut dire « Et vous ? ». On répond avec son prénom : « I’m… » ou « My name is… ».",
+        "« <en>And you?</en> » veut dire « Et vous ? ». On répond avec son prénom : « <en>I’m…</en> » ou « <en>My name is…</en> ».",
     },
   },
 };
@@ -142,6 +211,8 @@ const speakLadder: Ladder = [
 ];
 export const ladderFor = (activity: Activity): Ladder =>
   activity.type === "choice" ? choiceLadder : speakLadder;
+
+// ---------- option order (display only) ----------
 
 function hash(text: string): number {
   let h = 0;
@@ -184,6 +255,60 @@ export function narrowedOptions(
   return variant % 2 === 0 ? [distractor, correct] : [correct, distractor];
 }
 
+/**
+ * All options in a display order where the correct one is NOT always first (the
+ * curriculum lists it first in every item, which is itself an answer cue). Only
+ * the order on screen changes: responses are still the original option indices,
+ * so `assess()` and the meaning of stored evidence are untouched.
+ */
+export function displayOrder(
+  activity: Activity,
+  activityIndex: number,
+  sessionId: string,
+): readonly number[] {
+  if (activity.type !== "choice") return [];
+  const correct = activity.options.findIndex((o) => o.correct);
+  const others = activity.options.flatMap((o, i) => (o.correct ? [] : [i]));
+  const ordinal = activities
+    .slice(0, activityIndex)
+    .filter((a) => a.type === "choice").length;
+  const slot = (hash(sessionId) + ordinal) % activity.options.length;
+  const order = [...others];
+  order.splice(slot, 0, correct);
+  return order;
+}
+
+// ---------- the learner's first name (session memory only) ----------
+
+const notNames = new Set(
+  (
+    "fine good well ok okay happy sad tired sorry hungry ready here lost new " +
+    "from not very a an the yes no hello hi thanks thank you me so sick late " +
+    "cold hot afraid angry lucky back home great bad nice french english american"
+  ).split(" "),
+);
+
+/**
+ * A first name from a complete introduction ("I'm Alex", "My name is Marie").
+ * Returns null when it is not clearly a name (for example "I am fine"). The
+ * result lives in conversation state only: it is never written to learner
+ * records, and it is cleared on exit and restart.
+ */
+export function extractName(raw: string): string | null {
+  const text = raw.trim().replace(/’/g, "'");
+  const match =
+    /\b(?:my name is|i am|i'm|im)\s+([\p{L}][\p{L}\p{M}'-]*(?:\s+[\p{L}][\p{L}\p{M}'-]*)?)[.!?]?$/iu.exec(
+      text,
+    );
+  if (!match) return null;
+  const words = match[1].split(/\s+/);
+  if (words.some((w) => notNames.has(w.toLowerCase()))) return null;
+  const name = words
+    .map((w) => w.charAt(0).toLocaleUpperCase() + w.slice(1))
+    .join(" ");
+  return name.length <= 30 ? name : null;
+}
+
 // ---------- response classification ----------
 
 export type ResponseKind = "correct" | "incorrect" | "unclear" | "partial";
@@ -206,22 +331,32 @@ export function classifyText(activity: Activity, raw: string): ResponseKind {
 
 // ---------- copy catalogue ----------
 
-export function feedbackText(key: FeedbackKey, activityIndex: number): string {
+const withName = (name: string | null) => (name ? `, ${name}` : "");
+
+/** Marked French (and English where quoted) text shown on screen. */
+export function feedbackText(
+  key: FeedbackKey,
+  activityIndex: number,
+  name: string | null = null,
+): string {
   const activity = activities[activityIndex];
   // The acknowledgement shown on a new station is about the activity just completed.
   const previous = activities[activityIndex - 1];
-  const copy = previous ? stations[previous.id] : undefined;
   switch (key) {
     case "need_answer":
       return "Choisissez ou écrivez une réponse, ou demandez de l’aide.";
     case "unclear":
       return "Je n’ai pas bien compris. Vous pouvez réécouter, écrire autrement ou demander de l’aide.";
     case "partial":
-      return "J’ai compris un mot, merci. Essayez avec une phrase courte, par exemple avec « I’m » ou « My name is ».";
+      return "J’ai compris un mot, merci. Essayez avec une phrase courte, par exemple avec « <en>I’m</en> » ou « <en>My name is</en> ».";
     case "incorrect":
       return "Ce n’est pas encore ça, et ce n’est pas grave. Essayons autrement.";
     case "acknowledged":
-      return copy?.ack ?? "Merci.";
+      if (previous?.id === "say-name" && name)
+        return `<en>Nice to meet you, ${name}.</en> Très bien, merci !`;
+      if (previous?.id === "transfer")
+        return `Merci${withName(name)} ! C’était une situation différente.`;
+      return previous ? stations[previous.id].ack : "Merci.";
     case "skipped":
       return "D’accord, on continue. Cette étape est enregistrée sans évaluation.";
     case "thinking":
@@ -253,6 +388,121 @@ export function feedbackText(key: FeedbackKey, activityIndex: number): string {
   }
 }
 
+/**
+ * What Daniel says aloud for a feedback message. It is always the on-screen text
+ * (or a shorter excerpt of it); a few messages stay text-only.
+ */
+export function feedbackSegments(
+  key: FeedbackKey,
+  activityIndex: number,
+  name: string | null = null,
+): Segment[] {
+  const activity = activities[activityIndex];
+  const speaker = activity ? stations[activity.id].speaker : "Daniel";
+  switch (key) {
+    case "need_answer":
+    case "no_speech":
+    case "interrupted":
+    case "resumed":
+      return [];
+    case "checkin":
+      return toSegments("Je suis toujours là. Prenez votre temps.");
+    case "thinking":
+      return toSegments("Prenez votre temps. Je vous attends.");
+    case "slow_with_french":
+      return activity
+        ? [
+            ...toSegments("Écoutons plus lentement."),
+            englishLine(activity, speaker, EN_SLOW_RATE),
+            ...toSegments(`En français : ${activity.french}`),
+          ]
+        : [];
+    case "example_frame": {
+      const example = activity
+        ? repairContent[activity.id]?.example
+        : undefined;
+      return [
+        ...toSegments(feedbackText(key, activityIndex, name)),
+        ...(example
+          ? [
+              {
+                text: example.model,
+                lang: "en-US" as const,
+                rate: EN_RATE,
+                speaker: "Daniel" as const,
+              },
+            ]
+          : []),
+      ];
+    }
+    default:
+      return toSegments(feedbackText(key, activityIndex, name));
+  }
+}
+
+export const recapHeading = (name: string | null) =>
+  `Merci pour cette séance${withName(name)} !`;
+
+export function recapSegments(recap: Recap, name: string | null): Segment[] {
+  const parts: string[] = [recapHeading(name)];
+  if (recap.practised.length)
+    parts.push(`Nous avons pratiqué : ${recap.practised.join(" ; ")}.`);
+  if (recap.observed.length)
+    parts.push(`Ce que j’ai observé : ${recap.observed.join(" ")}`);
+  if (recap.next) parts.push(recap.next);
+  parts.push(recap.caveat);
+  return parts.flatMap((part) => toSegments(part));
+}
+
+/**
+ * Everything Daniel says when a new step begins: the reaction to the previous
+ * answer, a French lead-in, the English line (spoken by its own character), then
+ * the French instruction. Nothing here plays before the learner has acted.
+ */
+export function entrySegments(
+  state: ConversationState,
+  feedback: FeedbackKey | null,
+): Segment[] {
+  const index = state.activityIndex;
+  const out: Segment[] = feedback
+    ? feedbackSegments(feedback, index, state.learnerName)
+    : [];
+  if (state.phase === "recap")
+    return [...out, ...recapSegments(buildRecap(state), state.learnerName)];
+  const activity = activities[index];
+  const station = activity ? stations[activity.id] : undefined;
+  if (!activity || !station) return out;
+  out.push(...toSegments(station.lead));
+  out.push(englishLine(activity, station.speaker, EN_RATE));
+  if (state.phase !== "model") out.push(...toSegments(station.instruction));
+  return out;
+}
+
+/** The single line "Écouter" / "Plus lentement" repeats. */
+export function lineSegments(
+  state: ConversationState,
+  slow: boolean,
+): Segment[] {
+  if (state.phase === "orientation")
+    return toSegments(
+      welcomeSpoken(state.orientation),
+      "Daniel",
+      EN_RATE,
+      slow ? FR_SLOW_RATE : FR_RATE,
+    );
+  if (state.phase === "recap")
+    return recapSegments(buildRecap(state), state.learnerName);
+  const activity = activities[state.activityIndex];
+  if (!activity) return [];
+  return [
+    englishLine(
+      activity,
+      stations[activity.id].speaker,
+      slow ? EN_SLOW_RATE : EN_RATE,
+    ),
+  ];
+}
+
 export function noticeText(key: NoticeKey): string {
   switch (key) {
     case "audio_unavailable":
@@ -282,7 +532,10 @@ export function statusText(state: ConversationState): string {
     recovering: "Un petit souci : continuons autrement",
     ended: "Séance terminée",
   };
-  return labels[state.media];
+  const base = labels[state.media];
+  return !state.prefs.voice && state.media !== "ended"
+    ? `${base} · voix coupée`
+    : base;
 }
 
 // ---------- structure helpers (pure) ----------
@@ -356,7 +609,7 @@ export function visibleOverlays(state: ConversationState): OverlayKind[] {
   return out;
 }
 
-/** Option indices (into the activity's options) the learner can currently pick. */
+/** Option indices (into the activity's options) the learner can pick, in display order. */
 export function visibleOptionIndices(
   state: ConversationState,
 ): readonly number[] {
@@ -364,7 +617,7 @@ export function visibleOptionIndices(
   if (!activity || activity.type !== "choice") return [];
   return state.repair.strategy === "fewer_options"
     ? narrowedOptions(activity, reducedVariant(state))
-    : activity.options.map((_, i) => i);
+    : displayOrder(activity, state.activityIndex, state.sessionId);
 }
 
 /** Checks that no impossible combination of the three dimensions can exist. */
@@ -412,5 +665,9 @@ export function invariantViolations(state: ConversationState): string[] {
     problems.push("teaching phase without an activity");
   if (state.draft.choice !== null && state.draft.choice < 0)
     problems.push("negative choice");
+  if (state.lifecycle === "ended" && state.learnerName !== null)
+    problems.push("session-only name must be cleared when the session ends");
+  if (!state.prefs.voice && state.output.id !== null)
+    problems.push("muted voice cannot have a current output");
   return problems;
 }

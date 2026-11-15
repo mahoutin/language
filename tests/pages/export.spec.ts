@@ -27,9 +27,8 @@ test("Pages export loads assets, preserves lessons and scopes offline support", 
   ).toHaveJSProperty("complete", true);
   await page.getByRole("button", { name: "Continuer", exact: true }).click();
   await page
-    .getByRole("radio", { name: "Introducing himself", exact: true })
+    .getByRole("button", { name: "Introducing himself", exact: true })
     .click();
-  await page.getByRole("button", { name: "Répondre" }).click();
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",

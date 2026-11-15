@@ -38,6 +38,16 @@ export type Lifecycle = "active" | "paused" | "ended";
 
 export type Step = "present" | "attempt";
 
+export type Speaker = "Daniel" | "Maria" | "Alex";
+
+/** One utterance of a spoken sequence. The text is always also on screen. */
+export type Segment = {
+  text: string;
+  lang: "en-US" | "fr-FR";
+  rate: number;
+  speaker: Speaker;
+};
+
 /** Deterministic repair methods. Each one differs from the previous in kind, not wording. */
 export type Strategy =
   | "slow_with_french" // slower audio + French meaning of the line
@@ -111,7 +121,13 @@ export type ConversationState = {
   readonly startIndex: number;
   readonly draft: Draft;
   readonly helpOpen: boolean;
-  readonly prefs: { readonly captions: boolean };
+  readonly prefs: { readonly captions: boolean; readonly voice: boolean };
+  /** Session-only. Never persisted; cleared on exit and restart. */
+  readonly learnerName: string | null;
+  /** The turn in which the quiet check-in was already offered (once per turn). */
+  readonly checkinTurn: number | null;
+  /** Where media returns to when the current tutor speech ends. */
+  readonly speechFrom: MediaState | null;
   readonly feedback: FeedbackKey | null;
   readonly notice: NoticeKey | null;
   readonly repair: {
@@ -124,6 +140,8 @@ export type ConversationState = {
   readonly pending: {
     readonly activityId: string;
     readonly skip: boolean;
+    /** Session-only first name, adopted only if the answer is accepted. */
+    readonly name: string | null;
   } | null;
   readonly progress: Readonly<Record<string, ActivityProgress>>;
   readonly seen: readonly string[];
@@ -143,6 +161,8 @@ export type ConversationEvent = Envelope &
         source?: DraftSource;
       }
     | { type: "submit" }
+    | { type: "choose"; choice: number }
+    | { type: "voice_toggled" }
     | { type: "skip" }
     | {
         type: "commit_result";
@@ -179,13 +199,7 @@ export type ConversationEvent = Envelope &
 export type EventType = ConversationEvent["type"];
 
 export type Effect =
-  | {
-      type: "speak";
-      outputId: string;
-      text: string;
-      lang: "en-US" | "fr-FR";
-      rate: number;
-    }
+  | { type: "speak"; outputId: string; segments: Segment[] }
   | { type: "stop_audio" }
   | { type: "stop_recognition" }
   | { type: "commit"; action: LessonAction }
@@ -208,6 +222,7 @@ export type StepResult = {
 
 /** Events that belong to one specific turn and are dropped when the turn has moved on. */
 export const turnScoped: ReadonlySet<EventType> = new Set<EventType>([
+  "choose",
   "commit_result",
   "silence_checkin",
   "audio_started",

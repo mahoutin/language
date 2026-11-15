@@ -70,9 +70,7 @@ export function useConversation(
         stopPlayback.current();
         const { outputId } = effect;
         stopPlayback.current = playSpeech({
-          text: effect.text,
-          lang: effect.lang,
-          rate: effect.rate,
+          segments: effect.segments,
           onStart: () =>
             dispatchRef.current({ type: "audio_started", outputId }, turnId),
           onEnd: () =>

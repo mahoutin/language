@@ -10,7 +10,7 @@ import type { ConversationState } from "./types";
 
 const topics: Record<string, string> = {
   "listen-greeting": "comprendre une salutation",
-  "listen-question": "comprendre la question « What is your name? »",
+  "listen-question": "comprendre la question « <en>What is your name?</en> »",
   "say-name": "vous présenter",
   "read-intro": "lire la présentation de Maria",
   transfer: "vous présenter dans une situation différente",

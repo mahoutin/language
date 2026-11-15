@@ -13,7 +13,13 @@ import {
 } from "../../src/domain/conversation/machine";
 import {
   classifyText,
+  displayOrder,
+  entrySegments,
+  extractName,
   feedbackText,
+  lineSegments,
+  plainText,
+  recapHeading,
   invariantViolations,
   narrowedOptions,
   reducedVariant,
@@ -25,6 +31,7 @@ import type {
   ConversationEvent,
   ConversationState,
   Effect,
+  Segment,
   StepResult,
 } from "../../src/domain/conversation/types";
 
@@ -106,6 +113,11 @@ class Run {
   answerChoice(index: number) {
     return this.pick(index).submit();
   }
+  /** One tap on an option: a single atomic answer. */
+  tap(index: number) {
+    this.send({ type: "choose", choice: index });
+    return this;
+  }
   /** Walk to a given activity by answering each earlier one correctly. */
   goTo(index: number) {
     this.begin();
@@ -119,6 +131,13 @@ class Run {
     return this;
   }
 }
+
+/** Everything an effect list asks the voice to say, in order. */
+const segs = (effects: Effect[]): Segment[] =>
+  effects.flatMap((e) => (e.type === "speak" ? e.segments : []));
+const lastSpeak = (effects: Effect[]) =>
+  effects.filter((e) => e.type === "speak").at(-1) as
+    Extract<Effect, { type: "speak" }> | undefined;
 
 const hasEffect = (r: StepResult, type: Effect["type"]) =>
   r.effects.some((e) => e.type === type);
@@ -140,11 +159,11 @@ describe("scripted conversation: the full lifecycle", () => {
       activityIndex: 0,
       step: "present",
     });
-    const spoken = run.effects.find((e) => e.type === "speak");
-    expect(spoken).toMatchObject({
-      text: "Hello! My name is Daniel.",
-      lang: "en-US",
-    });
+    // French lead-in, then the English line, in the right voice language each.
+    expect(segs(run.effects)).toMatchObject([
+      { text: "Écoutez Daniel se présenter.", lang: "fr-FR" },
+      { text: "Hello! My name is Daniel.", lang: "en-US", speaker: "Daniel" },
+    ]);
 
     run.send({ type: "continue" });
     expect(run.conv).toMatchObject({
@@ -156,9 +175,9 @@ describe("scripted conversation: the full lifecycle", () => {
       activityIndex: 1,
       feedback: "acknowledged",
     });
-    expect(run.effects.filter((e) => e.type === "speak").at(-1)).toMatchObject({
-      text: "What is your name?",
-    });
+    expect(segs(run.effects.slice(-6)).map((x) => x.text)).toContain(
+      "What is your name?",
+    );
     run.answerChoice(0);
     expect(run.conv).toMatchObject({
       activityIndex: 2,
@@ -312,7 +331,11 @@ describe("interruption, replay and slower playback", () => {
     expect(run.conv.media).toBe("tutor_speaking");
     run.send({ type: "think_started" });
     expect(run.conv).toMatchObject({ media: "thinking_pause" });
-    expect(run.conv.output.id).toBeNull();
+    // The old output is gone; Daniel only offers a gentle word, in French.
+    expect(run.conv.output.id).not.toBe(id);
+    expect(segs(run.last.effects)).toMatchObject([
+      { lang: "fr-FR", text: expect.stringContaining("Prenez votre temps") },
+    ]);
     expect(hasEffect(run.last, "stop_audio")).toBe(true);
     expect(run.send({ type: "audio_ended", outputId: id }).ignored).toBe(
       "invalid_in_state",
@@ -323,14 +346,13 @@ describe("interruption, replay and slower playback", () => {
   it("repeat and slower start NEW outputs at different rates without touching the draft", () => {
     const run = new Run().goTo(2).type("My name");
     run.send({ type: "replay", slow: false });
-    const normal = run.last.effects.find((e) => e.type === "speak");
+    const normal = lastSpeak(run.last.effects);
     run.send({ type: "replay", slow: true });
-    const slow = run.last.effects.find((e) => e.type === "speak");
-    expect(normal).toMatchObject({
-      rate: 0.83,
-      text: "Hello! What is your name?",
-    });
-    expect(slow).toMatchObject({ rate: 0.65 });
+    const slow = lastSpeak(run.last.effects);
+    expect(normal!.segments).toMatchObject([
+      { rate: 0.83, text: "Hello! What is your name?", lang: "en-US" },
+    ]);
+    expect(slow!.segments).toMatchObject([{ rate: 0.65 }]);
     expect((normal as { outputId: string }).outputId).not.toBe(
       (slow as { outputId: string }).outputId,
     );
@@ -600,11 +622,12 @@ describe("adaptive repair (deterministic, genuinely different methods)", () => {
       phase: "scaffolded_retry",
       helpOpen: true,
     });
-    expect(
-      run.last.effects
-        .concat(run.effects.slice(-3))
-        .some((e) => e.type === "speak" && e.rate === 0.65),
-    ).toBe(true);
+    // Repair is explained aloud: French, then the line slowly in English, then the French meaning.
+    expect(segs(run.last.effects)).toMatchObject([
+      { lang: "fr-FR", text: "Écoutons plus lentement." },
+      { lang: "en-US", text: "Hello! What is your name?", rate: 0.65 },
+      { lang: "fr-FR" },
+    ]);
     expect(feedbackText("slow_with_french", 2)).toContain(
       "Comment vous appelez-vous",
     );
@@ -720,9 +743,9 @@ describe("adaptive repair (deterministic, genuinely different methods)", () => {
     const run = new Run().begin();
     run.send({ type: "stuck" });
     expect(run.conv).toMatchObject({ phase: "model", helpOpen: true });
-    expect(run.last.effects.find((e) => e.type === "speak")).toMatchObject({
-      rate: 0.65,
-    });
+    expect(segs(run.last.effects)).toMatchObject([
+      { lang: "en-US", rate: 0.65 },
+    ]);
   });
 });
 
@@ -783,6 +806,450 @@ describe("reduced choice does not give the answer away by position", () => {
     run.send({ type: "replay", slow: false });
     run.send({ type: "captions_toggled" });
     expect(visibleOptionIndices(run.conv)).toEqual(before);
+  });
+});
+
+describe("Daniel speaks: French reactions, instructions, repairs, check-ins and recap", () => {
+  const all = (run: Run) => segs(run.effects);
+
+  it("nothing is spoken until the learner acts; resume never speaks", () => {
+    const run = new Run();
+    expect(run.effects).toEqual([]);
+    run.begin();
+    expect(all(run).length).toBeGreaterThan(0);
+    const spoken = all(run).length;
+    run.send({ type: "pause" });
+    run.send({ type: "resume_session" });
+    expect(all(run)).toHaveLength(spoken);
+  });
+
+  it("each step is: reaction, French lead-in, the English line, French instruction", () => {
+    const run = new Run().goTo(2);
+    run.type("Yes please").submit(); // miss, so a reaction exists
+    const entry = entrySegments(
+      { ...run.conv, phase: "guided_attempt", feedback: null },
+      "acknowledged",
+    );
+    expect(entry.map((x) => [x.lang, x.speaker])).toEqual([
+      ["fr-FR", "Daniel"], // acknowledgement
+      ["fr-FR", "Daniel"], // lead-in
+      ["en-US", "Daniel"], // Hello! What is your name?
+      ["fr-FR", "Daniel"], // instruction
+    ]);
+    expect(entry[2].text).toBe("Hello! What is your name?");
+  });
+
+  it("French is never spoken by an English voice and English never by a French one", () => {
+    const run = new Run().goTo(2);
+    run.type("Alex").submit();
+    run.type("Yes please").submit();
+    run.type("Yes please").submit();
+    run.type("Yes please").submit();
+    run.pick(1).submit();
+    run.type("My name is Alex").submit();
+    run.send({ type: "skip" });
+    run.type("I'm Alex").submit();
+    expect(run.conv.phase).toBe("recap");
+    const spokenAll = all(run);
+    expect(spokenAll.length).toBeGreaterThan(20);
+    for (const seg of spokenAll) {
+      if (seg.lang === "en-US")
+        expect(seg.text, seg.text).not.toMatch(
+          /[éèêàçôûîï]|\b(votre|vous|nous|pour|avec)\b/i,
+        );
+      else
+        expect(seg.text, seg.text).not.toMatch(
+          /Hello|What is|My name is|I’m|Nice to meet/,
+        );
+      expect(seg.text).not.toMatch(/[«»<>]/);
+    }
+  });
+
+  it("every repair is explained aloud, once per method, and slow audio uses the slow rate", () => {
+    const run = new Run().goTo(2);
+    const expected = ["slow_with_french", "example_frame", "visual_probe"];
+    for (const strategy of expected) {
+      run.type("Yes please").submit();
+      expect(run.conv.repair.strategy).toBe(strategy);
+      expect(segs(run.last.effects).length, strategy).toBeGreaterThan(0);
+    }
+    run.pick(2).submit(); // wrong probe answer is explained aloud too
+    expect(
+      segs(run.last.effects)
+        .map((x) => x.text)
+        .join(" "),
+    ).toContain("Ce n’était pas celle-ci");
+    expect(segs(run.last.effects).some((x) => x.lang === "en-US")).toBe(true);
+  });
+
+  it("the quiet check-in is spoken once per turn, never repeatedly, and returns to thinking time", () => {
+    const run = new Run().goTo(2);
+    run.send({ type: "silence_checkin" });
+    expect(segs(run.last.effects).map((x) => x.text)).toEqual([
+      "Je suis toujours là. Prenez votre temps.",
+    ]);
+    expect(run.conv.media).toBe("thinking_pause");
+    const id = run.conv.output.id!;
+    run.send({ type: "audio_started", outputId: id });
+    expect(run.conv.media).toBe("tutor_speaking");
+    run.send({ type: "audio_ended", outputId: id });
+    expect(run.conv.media).toBe("thinking_pause"); // not "answer open" again
+    run.send({ type: "resume_turn" });
+    // A second check-in in the same turn is refused.
+    expect(run.send({ type: "silence_checkin" }).ignored).toBe(
+      "invalid_in_state",
+    );
+    // A new turn (a repair) allows one more.
+    run.type("Yes please").submit();
+    run.send({ type: "silence_checkin" });
+    expect(run.conv.feedback).toBe("checkin");
+    expect(run.learner.evidence).toHaveLength(3); // 2 earlier + the one miss; silence added nothing
+  });
+
+  it("interruption cancels the whole queued output; a late callback from it changes nothing", () => {
+    const run = new Run().begin();
+    const id = run.conv.output.id!;
+    run.send({ type: "audio_started", outputId: id });
+    run.send({ type: "interrupt" });
+    expect(run.conv.output.id).toBeNull();
+    expect(hasEffect(run.last, "stop_audio")).toBe(true);
+    expect(run.send({ type: "audio_ended", outputId: id }).ignored).toBe(
+      "invalid_in_state",
+    );
+    expect(run.send({ type: "audio_started", outputId: id }).ignored).toBe(
+      "invalid_in_state",
+    );
+    expect(run.conv.media).toBe("interrupted");
+  });
+
+  it("a newer output replaces an older one; the older queue cannot end the newer", () => {
+    const run = new Run().goTo(2);
+    run.send({ type: "replay", slow: false });
+    const first = run.conv.output.id!;
+    run.send({ type: "replay", slow: true });
+    const second = run.conv.output.id!;
+    expect(second).not.toBe(first);
+    run.send({ type: "audio_started", outputId: second });
+    expect(run.send({ type: "audio_ended", outputId: first }).ignored).toBe(
+      "invalid_in_state",
+    );
+    expect(run.conv.media).toBe("tutor_speaking");
+  });
+
+  it("the recap is spoken in full, with the heading, and can be replayed", () => {
+    const run = new Run().goTo(5);
+    const spoken = segs(run.last.effects)
+      .map((x) => x.text)
+      .join(" ");
+    expect(spoken).toContain("Merci pour cette séance");
+    expect(spoken).toContain("Nous avons pratiqué");
+    expect(spoken).toContain("pas une preuve de maîtrise");
+    expect(
+      segs(run.last.effects).some(
+        (x) => x.text === "What is your name?" && x.lang === "en-US",
+      ),
+    ).toBe(true);
+    run.send({ type: "replay", slow: false });
+    expect(
+      segs(run.last.effects)
+        .map((x) => x.text)
+        .join(" "),
+    ).toContain("Nous avons pratiqué");
+  });
+
+  it("the welcome is only spoken on request, in French", () => {
+    const run = new Run();
+    run.send({ type: "replay", slow: false });
+    const welcome = segs(run.last.effects);
+    expect(welcome.every((x) => x.lang === "fr-FR")).toBe(true);
+    expect(welcome[0].text).toContain("Bonjour, je suis Daniel.");
+    run.send({ type: "replay", slow: true });
+    expect(segs(run.last.effects)[0].rate).toBeLessThan(welcome[0].rate);
+  });
+
+  it("each character's English line is attributed to that character; French stays Daniel's", () => {
+    const run = new Run().goTo(3);
+    const maria = segs(run.last.effects);
+    expect(
+      maria.find((x) => x.text.startsWith("Hello, I am Maria")),
+    ).toMatchObject({
+      speaker: "Maria",
+      text: "Hello, I am Maria. Nice to meet you.",
+    });
+    run.tap(0);
+    const alex = segs(run.last.effects);
+    expect(alex.find((x) => x.text.startsWith("Hi there"))).toMatchObject({
+      speaker: "Alex",
+    });
+    expect(
+      alex
+        .filter((x) => x.lang === "fr-FR")
+        .every((x) => x.speaker === "Daniel"),
+    ).toBe(true);
+  });
+});
+
+describe("mute", () => {
+  it("muting stops the current output and silences everything that follows", () => {
+    const run = new Run().begin();
+    run.send({ type: "audio_started", outputId: run.conv.output.id! });
+    const id = run.conv.output.id!;
+    run.send({ type: "voice_toggled" });
+    expect(run.conv.prefs.voice).toBe(false);
+    expect(run.conv.output.id).toBeNull();
+    expect(hasEffect(run.last, "stop_audio")).toBe(true);
+    expect(run.conv.media).toBe("idle");
+    expect(run.send({ type: "audio_ended", outputId: id }).ignored).toBe(
+      "invalid_in_state",
+    );
+
+    const before = segs(run.effects).length;
+    run.send({ type: "continue" });
+    run.tap(1); // a miss: repair
+    run.tap(2);
+    run.send({ type: "silence_checkin" });
+    expect(segs(run.effects)).toHaveLength(before); // nothing was asked of the voice
+    expect(run.conv.feedback).toBe("checkin"); // the text equivalent is still there
+    expect(run.send({ type: "replay", slow: false }).ignored).toBe(
+      "invalid_in_state",
+    );
+  });
+
+  it("unmuting does not speak by itself, and speech resumes on the next step", () => {
+    const run = new Run().begin();
+    run.send({ type: "voice_toggled" });
+    run.send({ type: "voice_toggled" });
+    const before = segs(run.effects).length;
+    expect(run.conv.prefs.voice).toBe(true);
+    run.send({ type: "continue" });
+    run.tap(0);
+    expect(segs(run.effects).length).toBeGreaterThan(before);
+  });
+
+  it("mute survives pause and resume", () => {
+    const run = new Run().begin();
+    run.send({ type: "voice_toggled" });
+    run.send({ type: "pause" });
+    run.send({ type: "resume_session" });
+    expect(run.conv.prefs.voice).toBe(false);
+  });
+});
+
+describe("the learner's first name is session-only", () => {
+  it.each([
+    ["My name is Alex", "Alex"],
+    ["I'm alex", "Alex"],
+    ["I’m Jean-Pierre", "Jean-Pierre"],
+    ["Hello, I am Marie Claire", "Marie Claire"],
+    ["I am fine", null],
+    ["I am very happy today", null],
+    ["Alex", null],
+    ["Yes please", null],
+    ["I am 123", null],
+  ])("extracts %j → %j", (text, name) => {
+    expect(extractName(text)).toBe(name);
+  });
+
+  it("is used naturally after an accepted introduction, in English and in French", () => {
+    const run = new Run().goTo(2);
+    run.type("My name is alex").submit();
+    expect(run.conv.learnerName).toBe("Alex");
+    expect(plainText(feedbackText("acknowledged", 3, "Alex"))).toContain(
+      "Nice to meet you, Alex.",
+    );
+    const spoken = segs(run.last.effects);
+    expect(spoken[0]).toMatchObject({
+      text: "Nice to meet you, Alex.",
+      lang: "en-US",
+      speaker: "Daniel",
+    });
+    expect(spoken[1]).toMatchObject({
+      lang: "fr-FR",
+      text: "Très bien, merci !",
+    });
+    run.tap(0); // Maria
+    run.type("I'm Alex").submit();
+    expect(recapHeading(run.conv.learnerName)).toBe(
+      "Merci pour cette séance, Alex !",
+    );
+    expect(plainText(feedbackText("acknowledged", 5, "Alex"))).toContain(
+      "Merci, Alex !",
+    );
+    expect(
+      segs(run.last.effects)
+        .map((x) => x.text)
+        .join(" "),
+    ).toContain("Merci pour cette séance, Alex");
+  });
+
+  it("is not used when the reply was a miss, a bare word, a skip, or not clearly a name", () => {
+    for (const reply of ["Yes please", "Alex", "I am fine"]) {
+      const run = new Run().goTo(2).type(reply).submit();
+      if (reply === "I am fine") expect(run.conv.activityIndex).toBe(3); // accepted by the existing rubric
+      expect(run.conv.learnerName, reply).toBeNull();
+    }
+    const skipped = new Run().goTo(2);
+    skipped.send({ type: "skip" });
+    expect(skipped.conv.learnerName).toBeNull();
+    const hesitant = new Run().goTo(2).type("My name is Alex");
+    expect(hesitant.conv.learnerName).toBeNull(); // typing alone does not set it
+  });
+
+  it("is never written to the learner record or the evidence", () => {
+    const run = new Run().goTo(2).type("My name is Zoltan").submit();
+    run.tap(0);
+    run.type("I'm Zoltan").submit();
+    expect(run.conv.learnerName).toBe("Zoltan");
+    expect(JSON.stringify(run.learner)).not.toContain("Zoltan");
+    expect(JSON.stringify(run.learner)).not.toMatch(/learnerName|firstName/);
+    expect(learnerSchema.parse(run.learner)).toEqual(run.learner);
+  });
+
+  it("is cleared on exit and on restart", () => {
+    const run = new Run().goTo(2).type("My name is Alex").submit();
+    expect(run.conv.learnerName).toBe("Alex");
+    run.send({ type: "exit" });
+    expect(run.conv.learnerName).toBeNull();
+    expect(run.conv.draft.text).toBe("");
+
+    const again = new Run().goTo(5);
+    expect(again.conv.learnerName).not.toBeNull();
+    again.send({ type: "restart" });
+    expect(again.conv.learnerName).toBeNull();
+    // A new session never starts with a name.
+    expect(createConversation("fresh", again.learner).learnerName).toBeNull();
+  });
+});
+
+describe("one-tap answers", () => {
+  it("a single tap answers once, with the original option index", () => {
+    const run = new Run().begin();
+    run.send({ type: "continue" });
+    run.tap(0);
+    expect(run.commits).toBe(1);
+    expect(run.learner.evidence[0]).toMatchObject({
+      activityId: "listen-greeting",
+      correct: true,
+      assisted: true,
+    });
+    expect(run.conv.activityIndex).toBe(1);
+  });
+
+  it("a wrong tap is a normal miss and opens the next repair method", () => {
+    const run = new Run().begin();
+    run.send({ type: "continue" });
+    run.tap(2);
+    expect(run.conv.repair.strategy).toBe("slow_with_french");
+    expect(run.learner.evidence.at(-1)).toMatchObject({ correct: false });
+  });
+
+  it("a repeated tap cannot commit twice (same event, or a tap from the previous turn)", () => {
+    const run = new Run().begin();
+    run.send({ type: "continue" });
+    const tap: ConversationEvent = {
+      type: "choose",
+      choice: 2,
+      eventId: "double",
+      sessionId: "s1",
+      turnId: run.conv.turnId,
+    };
+    const first = step(run.conv, tap);
+    expect(first.effects.filter((e) => e.type === "commit")).toHaveLength(1);
+    // Same event again (double click delivered twice).
+    expect(step(first.state, tap).ignored).toBe("duplicate");
+    // A second tap, with a new id, while the first is still processing.
+    const during = step(first.state, { ...tap, eventId: "second" });
+    expect(during.ignored).toBe("invalid_in_state");
+    expect(during.effects).toEqual([]);
+    // After the miss opened a new turn, a late tap that was rendered for the old turn is stale.
+    const after = new Run().begin();
+    after.send({ type: "continue" });
+    const oldTurn = after.conv.turnId;
+    after.tap(2);
+    const late = step(after.conv, {
+      type: "choose",
+      choice: 1,
+      eventId: "late",
+      sessionId: "s1",
+      turnId: oldTurn,
+    });
+    expect(late.ignored).toBe("stale_turn");
+    expect(after.commits).toBe(1);
+  });
+
+  it("ignores options that are not on screen, and taps outside a turn", () => {
+    const run = new Run().begin();
+    expect(run.send({ type: "choose", choice: 0 }).ignored).toBe(
+      "invalid_in_state",
+    ); // model step
+    run.send({ type: "continue" });
+    expect(run.send({ type: "choose", choice: 9 }).ignored).toBe(
+      "invalid_in_state",
+    );
+    expect(run.send({ type: "choose", choice: -1 }).ignored).toBe(
+      "invalid_in_state",
+    );
+    run.tap(2);
+    run.tap(1); // second miss: two options left
+    const hidden = [0, 1, 2].find(
+      (i) => !visibleOptionIndices(run.conv).includes(i),
+    )!;
+    expect(run.send({ type: "choose", choice: hidden }).ignored).toBe(
+      "invalid_in_state",
+    );
+    expect(run.commits).toBe(2);
+  });
+
+  it("works for the diagnostic probe without committing anything", () => {
+    const run = new Run().goTo(2);
+    for (let i = 0; i < 3; i++) run.type("Yes please").submit();
+    const evidence = run.learner.evidence.length;
+    run.tap(1);
+    expect(run.conv.repair.strategy).toBe("probe_followup");
+    expect(run.learner.evidence).toHaveLength(evidence);
+  });
+});
+
+describe("the options do not give the answer away by position", () => {
+  it("the correct option is not always first, and sits in a different slot in each choice activity", () => {
+    for (const sessionId of ["s1", "abc", "q9", "zzz", "2026-11"]) {
+      const slots = [0, 1, 3].map((index) => {
+        const activity = activities[index];
+        const order = displayOrder(activity, index, sessionId);
+        expect([...order].sort()).toEqual([0, 1, 2]); // a permutation: nothing added or lost
+        return order.indexOf(0); // option 0 is the correct one in the curriculum
+      });
+      expect(new Set(slots).size, sessionId).toBe(3);
+    }
+    const firsts = new Set(
+      ["s1", "abc", "q9", "zzz", "2026-11"].map(
+        (id) => displayOrder(activities[0], 0, id)[0],
+      ),
+    );
+    expect(firsts.size).toBeGreaterThan(1);
+  });
+
+  it("is only a display order: answers still use the original index and assess() is unchanged", () => {
+    const run = new Run();
+    run.begin();
+    run.send({ type: "continue" });
+    const order = visibleOptionIndices(run.conv);
+    const correctSlot = order.indexOf(0);
+    expect(order).toHaveLength(3);
+    run.tap(order[correctSlot]);
+    expect(run.learner.evidence[0]).toMatchObject({
+      correct: true,
+      responseType: "choice",
+    });
+    expect(activities[0]).toMatchObject({
+      options: [{ correct: true }, { correct: false }, { correct: false }],
+    });
+  });
+
+  it("text equivalents: the French and English lines of a step are exactly what is spoken", () => {
+    const run = new Run().goTo(1);
+    const spoken = lineSegments(run.conv, false);
+    expect(spoken.map((x) => x.text)).toEqual([activities[1].prompt]);
   });
 });
 

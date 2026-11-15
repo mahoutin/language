@@ -2,12 +2,15 @@ import { activities } from "../curriculum";
 import {
   classifyText,
   derivePhase,
+  entrySegments,
+  extractName,
+  feedbackSegments,
   ladderFor,
+  lineSegments,
   recapIndex,
   repairContent,
   restingMedia,
   visibleOptionIndices,
-  welcomeSpoken,
 } from "./script";
 import {
   turnOpenPhases,
@@ -18,6 +21,7 @@ import {
   type Draft,
   type Effect,
   type FeedbackKey,
+  type Segment,
   type MediaState,
   type Step,
   type StepResult,
@@ -38,7 +42,6 @@ import {
  */
 
 export const NORMAL_RATE = 0.83;
-export const SLOW_RATE = 0.65;
 const MAX_SEEN = 64;
 const emptyDraft: Draft = { text: "", choice: null, source: "typed" };
 const transientFeedback: ReadonlySet<FeedbackKey> = new Set([
@@ -70,7 +73,10 @@ export function createConversation(
     startIndex,
     draft: emptyDraft,
     helpOpen: false,
-    prefs: { captions: true },
+    prefs: { captions: true, voice: true },
+    learnerName: null,
+    checkinTurn: null,
+    speechFrom: null,
     feedback: null,
     notice: null,
     repair: { rung: 0, strategy: null, probeCorrect: null },
@@ -118,35 +124,29 @@ function bump(
   return { ...state.progress, [activity.id]: update(current) };
 }
 
-function lineFor(
-  state: ConversationState,
-): { text: string; lang: "en-US" | "fr-FR" } | null {
-  if (state.phase === "orientation")
-    return { text: welcomeSpoken(state.orientation), lang: "fr-FR" };
-  if (state.phase === "recap")
-    return {
-      text: "Voici ce que nous avons pratiqué aujourd’hui.",
-      lang: "fr-FR",
-    };
-  const activity = activities[state.activityIndex];
-  return activity ? { text: activity.prompt, lang: "en-US" } : null;
-}
-
-/** Starts a new output (new id) for the current line; the previous one is invalidated. */
+/**
+ * Starts a new output (new id) for a sequence of segments; the previous output
+ * is invalidated. A muted voice emits no speech at all (text stays on screen).
+ */
 function speak(
   state: ConversationState,
-  rate: number,
+  segments: Segment[],
 ): { state: ConversationState; effects: Effect[] } {
-  const line = lineFor(state);
-  if (!line) return { state, effects: [{ type: "stop_audio" }] };
+  if (segments.length === 0 || !state.prefs.voice)
+    return {
+      state: { ...state, output: { id: null, rate: NORMAL_RATE } },
+      effects: [{ type: "stop_audio" }],
+    };
   const outputSeq = state.outputSeq + 1;
   const outputId = `${state.sessionId}:t${state.turnId}:o${outputSeq}`;
   return {
-    state: { ...state, outputSeq, output: { id: outputId, rate } },
-    effects: [
-      { type: "stop_audio" },
-      { type: "speak", outputId, text: line.text, lang: line.lang, rate },
-    ],
+    state: {
+      ...state,
+      outputSeq,
+      output: { id: outputId, rate: segments[0].rate },
+      speechFrom: null,
+    },
+    effects: [{ type: "stop_audio" }, { type: "speak", outputId, segments }],
   };
 }
 
@@ -188,7 +188,7 @@ function enterStation(
     output: { id: null, rate: NORMAL_RATE },
   });
   const ready = { ...base, media: restingMedia(base) };
-  const spoken = speak(ready, NORMAL_RATE);
+  const spoken = speak(ready, entrySegments(ready, feedback));
   return {
     state: spoken.state,
     effects: [...spoken.effects, { type: "focus", target: "heading" }],
@@ -238,11 +238,12 @@ function escalate(state: ConversationState): StepResult {
     })),
   });
   next = { ...next, media: restingMedia(next) };
-  if (strategy === "slow_with_french") {
-    const spoken = speak(next, SLOW_RATE);
-    return { state: spoken.state, effects: spoken.effects };
-  }
-  return { state: next, effects: [{ type: "stop_audio" }] };
+  // Every repair is explained aloud as well as on screen (muted: text only).
+  const spoken = speak(
+    next,
+    feedbackSegments(feedback, next.activityIndex, next.learnerName),
+  );
+  return { state: spoken.state, effects: spoken.effects };
 }
 
 const unchanged = (
@@ -308,7 +309,13 @@ function handle(
       )
         return null;
       const fresh = enterStation(
-        { ...s, progress: {}, orientation: "fresh", startIndex: 0 },
+        {
+          ...s,
+          progress: {},
+          learnerName: null,
+          orientation: "fresh",
+          startIndex: 0,
+        },
         0,
         "present",
         null,
@@ -359,11 +366,32 @@ function handle(
       return unchanged({
         ...left,
         draft,
+        speechFrom: null,
         feedback:
           left.feedback && transientFeedback.has(left.feedback)
             ? null
             : left.feedback,
       });
+    }
+
+    case "choose": {
+      // One tap = one answer. Validated here, then handled exactly like a submit
+      // (so a second tap while processing, or from an earlier turn, is dropped).
+      if (!turnOpen || s.media === "processing" || !activity) return null;
+      const allowed =
+        s.phase === "diagnostic_probe"
+          ? (repairContent[activity.id]?.probe?.options.map((_, i) => i) ?? [])
+          : visibleOptionIndices(s);
+      if (!allowed.includes(event.choice)) return null;
+      return handle(
+        { ...s, draft: { ...s.draft, choice: event.choice } },
+        {
+          type: "submit",
+          eventId: event.eventId,
+          sessionId: event.sessionId,
+          turnId: event.turnId,
+        },
+      );
     }
 
     case "submit": {
@@ -398,9 +426,19 @@ function handle(
             strategies: [...p.strategies, "probe_followup"],
           })),
         });
-        return { state: { ...next, media: restingMedia(next) }, effects: stop };
+        const ready = { ...next, media: restingMedia(next) };
+        const spoken = speak(
+          ready,
+          feedbackSegments(
+            ready.feedback!,
+            ready.activityIndex,
+            ready.learnerName,
+          ),
+        );
+        return { state: spoken.state, effects: [...stop, ...spoken.effects] };
       }
 
+      let name: string | null = null;
       let response: string | number;
       if (activity.type === "choice") {
         const choice = s.draft.choice;
@@ -427,12 +465,20 @@ function handle(
               effects: [...stop, ...repaired.effects],
             };
           }
-          return unchanged(
-            { ...counted, media: restingMedia(counted), feedback: kind },
-            stop,
+          const ready = {
+            ...counted,
+            media: restingMedia(counted),
+            feedback: kind,
+          };
+          const spoken = speak(
+            ready,
+            feedbackSegments(kind, ready.activityIndex, ready.learnerName),
           );
+          return { state: spoken.state, effects: [...stop, ...spoken.effects] };
         }
         response = s.draft.text.trim();
+        // Session-only: used to greet the learner, never stored.
+        name = kind === "correct" ? extractName(response) : null;
       }
       const modality =
         activity.type === "speak"
@@ -446,7 +492,7 @@ function handle(
           media: "processing",
           feedback: null,
           unclearStreak: 0,
-          pending: { activityId: activity.id, skip: false },
+          pending: { activityId: activity.id, skip: false, name },
           progress: bump(s, (p) => ({ ...p, attempts: p.attempts + 1 })),
         },
         effects: [
@@ -474,7 +520,7 @@ function handle(
           media: "processing",
           feedback: null,
           output: { id: null, rate: s.output.rate },
-          pending: { activityId: activity.id, skip: true },
+          pending: { activityId: activity.id, skip: true, name: null },
         },
         effects: [
           { type: "stop_audio" },
@@ -502,6 +548,10 @@ function handle(
       if (event.advanced) {
         const recorded = {
           ...s,
+          learnerName:
+            !skip && event.correct && s.pending.name
+              ? s.pending.name
+              : s.learnerName,
           pending: null,
           progress: bump(s, (p) => ({
             ...p,
@@ -521,9 +571,9 @@ function handle(
     }
 
     case "replay": {
-      if (s.media === "processing") return null;
-      const line = lineFor(s);
-      if (!line) return null;
+      if (s.media === "processing" || !s.prefs.voice) return null;
+      const segments = lineSegments(s, event.slow);
+      if (segments.length === 0) return null;
       const left = leaveTransient(s);
       const counted = {
         ...left,
@@ -532,8 +582,7 @@ function handle(
           helpRequests: p.helpRequests + 1,
         })),
       };
-      const spoken = speak(counted, event.slow ? SLOW_RATE : NORMAL_RATE);
-      return spoken;
+      return speak(counted, segments);
     }
 
     case "stuck": {
@@ -544,8 +593,8 @@ function handle(
       };
       if (!turnOpen) {
         // Tutor-only step: slower audio plus the French explanation, no state change.
-        const spoken = speak({ ...counted, helpOpen: true }, SLOW_RATE);
-        return spoken;
+        const open = { ...counted, helpOpen: true };
+        return speak(open, lineSegments(open, true));
       }
       return escalate(counted);
     }
@@ -565,7 +614,26 @@ function handle(
       return unchanged({ ...s, helpOpen: false });
 
     case "captions_toggled":
-      return unchanged({ ...s, prefs: { captions: !s.prefs.captions } });
+      return unchanged({
+        ...s,
+        prefs: { ...s.prefs, captions: !s.prefs.captions },
+      });
+
+    case "voice_toggled": {
+      const voice = !s.prefs.voice;
+      if (voice) return unchanged({ ...s, prefs: { ...s.prefs, voice } });
+      // Muting silences everything at once and cancels the current output.
+      return unchanged(
+        {
+          ...s,
+          prefs: { ...s.prefs, voice },
+          output: { id: null, rate: s.output.rate },
+          speechFrom: null,
+          media: s.media === "tutor_speaking" ? restingMedia(s) : s.media,
+        },
+        [{ type: "stop_audio" }],
+      );
+    }
 
     case "think_started": {
       if (!turnOpen) return null;
@@ -579,21 +647,24 @@ function handle(
       )
         return null;
       // Asking for a moment while the tutor talks simply stops the voice.
-      const effects: Effect[] =
-        s.media === "learner_speaking"
-          ? [{ type: "stop_recognition" }]
-          : s.media === "tutor_speaking"
-            ? [{ type: "stop_audio" }]
-            : [];
-      return unchanged(
-        {
-          ...s,
-          media: "thinking_pause",
-          feedback: "thinking",
-          output: { id: null, rate: s.output.rate },
-        },
-        effects,
+      const thinking = {
+        ...s,
+        media: "thinking_pause" as const,
+        feedback: "thinking" as const,
+      };
+      const spoken = speak(
+        thinking,
+        feedbackSegments("thinking", s.activityIndex, s.learnerName),
       );
+      return {
+        state: spoken.state,
+        effects: [
+          ...(s.media === "learner_speaking"
+            ? [{ type: "stop_recognition" as const }]
+            : []),
+          ...spoken.effects,
+        ],
+      };
     }
 
     case "resume_turn": {
@@ -605,16 +676,23 @@ function handle(
 
     case "silence_checkin": {
       // A pause is never an outcome: no attempt, no evidence, no progression, no new strategy.
-      if (s.media !== "listening_open") return null;
-      return unchanged({
+      // The quiet offer of help is made once per turn, never repeatedly.
+      if (s.media !== "listening_open" || s.checkinTurn === s.turnId)
+        return null;
+      const quiet = {
         ...s,
-        media: "thinking_pause",
-        feedback: "checkin",
+        media: "thinking_pause" as const,
+        feedback: "checkin" as const,
+        checkinTurn: s.turnId,
         progress: bump(s, (p) => ({
           ...p,
           silenceCheckins: p.silenceCheckins + 1,
         })),
-      });
+      };
+      return speak(
+        quiet,
+        feedbackSegments("checkin", s.activityIndex, s.learnerName),
+      );
     }
 
     case "interrupt": {
@@ -624,6 +702,7 @@ function handle(
           ...s,
           media: "interrupted",
           output: { id: null, rate: s.output.rate },
+          speechFrom: null,
           feedback: "interrupted",
           helpOpen:
             s.phase === "orientation" || s.phase === "recap" ? false : true,
@@ -636,7 +715,12 @@ function handle(
       if (event.outputId !== s.output.id) return null;
       if (!["idle", "listening_open", "thinking_pause"].includes(s.media))
         return null;
-      return unchanged({ ...s, media: "tutor_speaking" });
+      return unchanged({
+        ...s,
+        media: "tutor_speaking",
+        // A quiet check-in spoken during thinking time returns to thinking time.
+        speechFrom: s.media === "thinking_pause" ? "thinking_pause" : null,
+      });
     }
 
     case "audio_ended": {
@@ -644,7 +728,11 @@ function handle(
       return unchanged({
         ...s,
         output: { id: null, rate: s.output.rate },
-        media: s.media === "tutor_speaking" ? restingMedia(s) : s.media,
+        speechFrom: null,
+        media:
+          s.media === "tutor_speaking"
+            ? (s.speechFrom ?? restingMedia(s))
+            : s.media,
       });
     }
 
@@ -653,7 +741,11 @@ function handle(
       return unchanged({
         ...s,
         output: { id: null, rate: s.output.rate },
-        media: s.media === "tutor_speaking" ? restingMedia(s) : s.media,
+        speechFrom: null,
+        media:
+          s.media === "tutor_speaking"
+            ? (s.speechFrom ?? restingMedia(s))
+            : s.media,
         notice: "audio_unavailable",
       });
     }
@@ -678,6 +770,7 @@ function handle(
         {
           ...left,
           media: "learner_speaking",
+          speechFrom: null,
           output: { id: null, rate: s.output.rate },
           feedback:
             left.feedback && transientFeedback.has(left.feedback)
@@ -744,6 +837,7 @@ function handle(
                 ? null
                 : s.media,
           media: "idle",
+          speechFrom: null,
           output: { id: null, rate: s.output.rate },
         },
         [{ type: "stop_audio" }, { type: "stop_recognition" }],
@@ -778,6 +872,10 @@ function handle(
           pausedFrom: null,
           pending: null,
           output: { id: null, rate: s.output.rate },
+          speechFrom: null,
+          // Session-only information never outlives the session.
+          learnerName: null,
+          draft: emptyDraft,
         },
         [
           { type: "stop_audio" },

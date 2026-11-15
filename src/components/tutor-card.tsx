@@ -1,10 +1,17 @@
 "use client";
 
-import type { RefObject } from "react";
+import {
+  useRef,
+  type KeyboardEvent,
+  type MouseEvent,
+  type RefObject,
+} from "react";
 import { activities } from "@/domain/curriculum";
 import {
   feedbackText,
   noticeText,
+  parseMarked,
+  recapHeading,
   repairContent,
   stations,
   statusText,
@@ -20,19 +27,57 @@ import {
 import type { ConversationBody } from "./use-conversation";
 import styles from "./tutor-session.module.css";
 
-type Send = (body: ConversationBody) => void;
+type Send = (body: ConversationBody, turnId?: number) => void;
 
-function Replay({ send }: { send: Send }) {
+/** Holding Enter or Space must not repeat an action (a held key would re-answer). */
+function blockKeyRepeat(event: KeyboardEvent<HTMLElement>) {
+  if (event.repeat && (event.key === "Enter" || event.key === " "))
+    event.preventDefault();
+}
+
+/**
+ * Flow buttons (continue, skip, "I don't understand", …) ignore the 2nd/3rd
+ * click of a double or triple click: the layout changes after the first one,
+ * so the extra clicks would land on whatever is then under the pointer.
+ */
+const flow = (act: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
+  if (event.detail > 1) return;
+  act();
+};
+
+/** A second answer inside this window is treated as an accidental repeat (double tap, key repeat). */
+export const ANSWER_GUARD_MS = 400;
+
+/** French text with English phrases wrapped in lang="en" (same markup source as the speech). */
+export function Marked({ text }: { text: string }) {
+  return (
+    <>
+      {parseMarked(text).map((span, i) =>
+        span.lang === "en" ? (
+          <span key={i} lang="en">
+            {span.text}
+          </span>
+        ) : (
+          <span key={i}>{span.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+function Replay({ send, muted }: { send: Send; muted: boolean }) {
   return (
     <div className={styles.replay} role="group" aria-label="Lecture audio">
       <button
         type="button"
+        disabled={muted}
         onClick={() => send({ type: "replay", slow: false })}
       >
         Écouter
       </button>
       <button
         type="button"
+        disabled={muted}
         onClick={() => send({ type: "replay", slow: true })}
       >
         Plus lentement
@@ -43,8 +88,10 @@ function Replay({ send }: { send: Send }) {
 
 /**
  * The single instructional surface. It renders only what the current
- * pedagogical phase and media state call for; French support is always part of
- * it in Phase 1B, and Help/Captions stay separate controls.
+ * pedagogical phase and media state call for: the options or the field, one
+ * help button, and the extras (a moment, skip) only when they are relevant.
+ * French support is always part of it in Phase 1B, and Help/Captions stay
+ * separate controls.
  */
 export function TutorCard({
   state,
@@ -52,18 +99,23 @@ export function TutorCard({
   headingRef,
   inputRef,
   hint,
+  ownVoices,
 }: {
   state: ConversationState;
   send: Send;
   headingRef: RefObject<HTMLHeadingElement | null>;
   inputRef: RefObject<HTMLInputElement | null>;
   hint: string;
+  ownVoices: Record<"Maria" | "Alex", boolean>;
 }) {
+  // "Never answered yet": performance.now() counts from page load, so 0 would swallow an early first tap.
+  const lastAnswerAt = useRef(Number.NEGATIVE_INFINITY);
   const activity = activities[state.activityIndex];
   const station = activity ? stations[activity.id] : undefined;
   const overlays = visibleOverlays(state);
   const turnOpen = turnOpenPhases.has(state.phase);
   const busy = state.media === "processing";
+  const muted = !state.prefs.voice;
   const probe =
     state.phase === "diagnostic_probe" && activity
       ? repairContent[activity.id]?.probe
@@ -74,30 +126,55 @@ export function TutorCard({
       state.repair.strategy === "probe_followup" ||
       state.repair.strategy === "explain_and_offer_skip") &&
     example;
+  // Extra actions appear when they matter: after a difficulty, or inside Aide.
+  const struggling = state.repair.strategy !== null;
+  const canThink =
+    turnOpen &&
+    (state.media === "listening_open" ||
+      state.media === "learner_speaking" ||
+      state.media === "tutor_speaking");
+
+  /** Runs `act` unless an answer was just given (double tap / key repeat). */
+  const once = (act: () => void) => () => {
+    const now = performance.now();
+    if (now - lastAnswerAt.current < ANSWER_GUARD_MS) return;
+    lastAnswerAt.current = now;
+    act();
+  };
 
   let heading: string;
   if (state.phase === "orientation")
     heading = welcomeCopy[state.orientation].title;
-  else if (state.phase === "recap") heading = "Merci pour cette séance !";
+  else if (state.phase === "recap") heading = recapHeading(state.learnerName);
   else if (state.phase === "model") heading = station?.lead ?? "";
   else if (probe) heading = probe.question;
   else heading = station?.instruction ?? "";
 
   const feedback = state.feedback
-    ? feedbackText(state.feedback, state.activityIndex)
+    ? feedbackText(state.feedback, state.activityIndex, state.learnerName)
     : "";
   const resting =
     state.media === "thinking_pause" || state.media === "interrupted";
-  const mediaVisible = state.media === "tutor_speaking";
-  // Daniel's French lead-in frames each new step (a new speaker, a changed
-  // situation). It is dropped on repair turns to keep the card short.
-  const showLead =
-    (state.phase === "guided_attempt" || state.phase === "transfer_attempt") &&
-    state.repair.strategy === null;
+  const speaker = station?.speaker ?? "Daniel";
+  const voiceNote =
+    speaker === "Daniel"
+      ? ""
+      : ownVoices[speaker]
+        ? "autre voix du navigateur"
+        : "même voix que Daniel";
+  const optionList = probe
+    ? probe.options.map((o, i) => ({ label: o.label, index: i }))
+    : activity?.type === "choice"
+      ? visibleOptionIndices(state).map((i) => ({
+          label: activity.options[i].label,
+          index: i,
+        }))
+      : [];
 
   return (
     <div
       className={styles.card}
+      onKeyDown={blockKeyRepeat}
       data-help={overlays.includes("french_help")}
       data-phase={state.phase}
       data-media={state.media}
@@ -107,28 +184,17 @@ export function TutorCard({
           <span className={styles.dot} aria-hidden="true" />
           {statusText(state)}
         </p>
-        {mediaVisible && (
+        {state.media === "tutor_speaking" && (
           <button type="button" onClick={() => send({ type: "interrupt" })}>
             Arrêter la voix
           </button>
         )}
       </div>
 
-      {showLead && station && <p className={styles.lead}>{station.lead}</p>}
-
-      <h1
-        id="tutor-activity"
-        ref={headingRef}
-        tabIndex={-1}
-        className={styles.instruction}
-      >
-        {heading}
-      </h1>
-
       <div className={styles.messages}>
         {feedback && (
           <p className={styles.feedback} role="status">
-            {feedback}
+            <Marked text={feedback} />
           </p>
         )}
         {state.notice && (
@@ -155,6 +221,21 @@ export function TutorCard({
         )}
       </div>
 
+      {state.phase !== "orientation" &&
+        state.phase !== "recap" &&
+        state.phase !== "model" &&
+        state.repair.strategy === null &&
+        station && <p className={styles.lead}>{station.lead}</p>}
+
+      <h1
+        id="tutor-activity"
+        ref={headingRef}
+        tabIndex={-1}
+        className={styles.instruction}
+      >
+        <Marked text={heading} />
+      </h1>
+
       {state.phase === "orientation" && (
         <>
           <p className={styles.french}>{welcomeCopy[state.orientation].body}</p>
@@ -163,7 +244,7 @@ export function TutorCard({
               <button
                 type="button"
                 className={styles.primary}
-                onClick={() => send({ type: "restart" })}
+                onClick={flow(() => send({ type: "restart" }))}
               >
                 Pratiquer à nouveau
               </button>
@@ -171,13 +252,14 @@ export function TutorCard({
               <button
                 type="button"
                 className={styles.primary}
-                onClick={() => send({ type: "begin" })}
+                onClick={flow(() => send({ type: "begin" }))}
               >
                 Commencer
               </button>
             )}
             <button
               type="button"
+              disabled={muted}
               onClick={() => send({ type: "replay", slow: false })}
             >
               Écouter le message
@@ -195,25 +277,24 @@ export function TutorCard({
               <div className={styles.captionRow}>
                 <div className={styles.captionText}>
                   <span className={styles.speaker}>{station.speaker}</span>
+                  {voiceNote && (
+                    <span className={styles.voiceNote}>({voiceNote})</span>
+                  )}
                   {overlays.includes("english_caption") && (
                     <p className={styles.caption} lang="en">
                       {activity.prompt}
                     </p>
                   )}
                 </div>
-                {overlays.includes("replay_controls") && <Replay send={send} />}
+                {overlays.includes("replay_controls") && (
+                  <Replay send={send} muted={muted} />
+                )}
               </div>
               <p className={styles.french}>{activity.french}</p>
               {overlays.includes("context_note") && (
                 <p className={styles.context}>{station.context}</p>
               )}
             </div>
-          )}
-
-          {overlays.includes("french_help") && (
-            <p className={styles.help} role="status">
-              <strong>Aide en français</strong> · {station.help}
-            </p>
           )}
 
           {showFrame && example && (
@@ -228,11 +309,14 @@ export function TutorCard({
               <button
                 type="button"
                 className={styles.primary}
-                onClick={() => send({ type: "continue" })}
+                onClick={flow(() => send({ type: "continue" }))}
               >
                 Continuer
               </button>
-              <button type="button" onClick={() => send({ type: "stuck" })}>
+              <button
+                type="button"
+                onClick={flow(() => send({ type: "stuck" }))}
+              >
                 Je ne comprends pas
               </button>
             </div>
@@ -242,44 +326,30 @@ export function TutorCard({
                 className={styles.response}
                 onSubmit={(event) => {
                   event.preventDefault();
-                  send({ type: "submit" });
+                  if (!(probe || activity.type === "choice"))
+                    once(() => send({ type: "submit" }))();
                 }}
               >
                 {probe || activity.type === "choice" ? (
                   <div
                     className={styles.options}
                     role="group"
-                    aria-label="Votre réponse"
-                    data-count={
-                      probe
-                        ? probe.options.length
-                        : visibleOptionIndices(state).length
-                    }
+                    aria-label="Votre réponse : touchez une réponse"
+                    data-count={optionList.length}
                   >
-                    {(probe
-                      ? probe.options.map((o, i) => ({
-                          label: o.label,
-                          index: i,
-                        }))
-                      : visibleOptionIndices(state).map((i) => ({
-                          label:
-                            activity.type === "choice"
-                              ? activity.options[i].label
-                              : "",
-                          index: i,
-                        }))
-                    ).map(({ label, index }) => (
-                      <label key={`${state.turnId}-${index}`} lang="en">
-                        <input
-                          type="radio"
-                          name="response"
-                          checked={state.draft.choice === index}
-                          onChange={() =>
-                            send({ type: "draft_changed", choice: index })
-                          }
-                        />
+                    {optionList.map(({ label, index }) => (
+                      <button
+                        key={`${state.turnId}-${index}`}
+                        type="button"
+                        className={styles.option}
+                        lang="en"
+                        disabled={busy}
+                        onClick={once(() =>
+                          send({ type: "choose", choice: index }, state.turnId),
+                        )}
+                      >
                         {label}
-                      </label>
+                      </button>
                     ))}
                   </div>
                 ) : (
@@ -302,62 +372,75 @@ export function TutorCard({
                   </label>
                 )}
                 <div className={styles.actions}>
-                  <button
-                    className={styles.primary}
-                    type="submit"
-                    disabled={busy}
-                  >
-                    Répondre
-                  </button>
+                  {!(probe || activity.type === "choice") && (
+                    <button
+                      className={styles.primary}
+                      type="submit"
+                      disabled={busy}
+                    >
+                      Répondre
+                    </button>
+                  )}
                   {resting && (
                     <button
                       type="button"
-                      onClick={() => send({ type: "resume_turn" })}
+                      onClick={flow(() => send({ type: "resume_turn" }))}
                     >
                       Je suis prêt
                     </button>
                   )}
-                  {!probe && (
+                  <button
+                    type="button"
+                    onClick={flow(() => send({ type: "stuck" }))}
+                  >
+                    {probe ? "Je ne sais pas" : "Je ne comprends pas"}
+                  </button>
+                  {struggling && (
                     <button
                       type="button"
-                      onClick={() => send({ type: "stuck" })}
+                      className={
+                        state.feedback === "explain_and_offer_skip" ||
+                        state.feedback === "offer_continue_again"
+                          ? styles.primary
+                          : undefined
+                      }
+                      onClick={flow(() => send({ type: "skip" }))}
                     >
-                      Je ne comprends pas
+                      Passer sans évaluation
                     </button>
                   )}
-                  {probe && (
+                </div>
+              </form>
+            )
+          )}
+
+          {overlays.includes("french_help") && (
+            <div className={styles.help}>
+              <p role="status">
+                <strong>Aide en français</strong> ·{" "}
+                <Marked text={station.help} />
+              </p>
+              {turnOpen && (
+                <div className={styles.actions}>
+                  {canThink && (
                     <button
                       type="button"
-                      onClick={() => send({ type: "stuck" })}
-                    >
-                      Je ne sais pas
-                    </button>
-                  )}
-                  {(state.media === "listening_open" ||
-                    state.media === "learner_speaking" ||
-                    state.media === "tutor_speaking") && (
-                    <button
-                      type="button"
-                      onClick={() => send({ type: "think_started" })}
+                      onClick={flow(() => send({ type: "think_started" }))}
                     >
                       J’ai besoin d’un moment
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className={
-                      state.feedback === "explain_and_offer_skip" ||
-                      state.feedback === "offer_continue_again"
-                        ? styles.primary
-                        : undefined
-                    }
-                    onClick={() => send({ type: "skip" })}
-                  >
-                    Passer sans évaluation
-                  </button>
+                  {!struggling && (
+                    <button
+                      type="button"
+                      onClick={flow(() => send({ type: "skip" }))}
+                    >
+                      Passer sans évaluation
+                    </button>
+                  )}
                 </div>
-              </form>
-            )
+              )}
+            </div>
           )}
         </>
       )}
@@ -375,7 +458,9 @@ function Recap({ state, send }: { state: ConversationState; send: Send }) {
             <h2>Nous avons pratiqué</h2>
             <ul>
               {recap.practised.map((item) => (
-                <li key={item}>{item}</li>
+                <li key={item}>
+                  <Marked text={item} />
+                </li>
               ))}
             </ul>
           </>
@@ -401,7 +486,14 @@ function Recap({ state, send }: { state: ConversationState; send: Send }) {
         >
           Terminer la séance
         </button>
-        <button type="button" onClick={() => send({ type: "restart" })}>
+        <button
+          type="button"
+          disabled={!state.prefs.voice}
+          onClick={() => send({ type: "replay", slow: false })}
+        >
+          Réécouter
+        </button>
+        <button type="button" onClick={flow(() => send({ type: "restart" }))}>
           Pratiquer à nouveau
         </button>
       </div>

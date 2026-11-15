@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
-  answer,
+  skipStep,
+  submitAnswer,
   beginConversation,
   openLesson,
   pickAndAnswer,
@@ -31,14 +32,14 @@ test("full lesson, resumption, export, repeat and erasure", async ({
   await expect(page.getByLabel("Votre réponse en anglais")).toHaveValue(
     "I'm Alex",
   );
-  await answer(page).click();
+  await submitAnswer(page);
   await pickAndAnswer(page, "Maria");
   await page
     .getByLabel("Votre réponse en anglais")
     .fill("Hello, my name is Alex");
-  await answer(page).click();
+  await submitAnswer(page);
   await expect(
-    page.getByRole("heading", { name: "Merci pour cette séance !" }),
+    page.getByRole("heading", { name: /Merci pour cette séance/ }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Pratiquer à nouveau" }).click();
   await expect(
@@ -88,8 +89,10 @@ test("repair, skip and invalid saved record protection", async ({ page }) => {
   ).toBeVisible();
   await pickAndAnswer(page, "Ordering food");
   // Second miss: a different method (fewer options).
-  await expect(page.getByRole("radio")).toHaveCount(2);
-  await page.getByRole("button", { name: "Passer sans évaluation" }).click();
+  await expect(
+    page.getByRole("group", { name: /Votre réponse/ }).getByRole("button"),
+  ).toHaveCount(2);
+  await skipStep(page);
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",
@@ -234,8 +237,8 @@ test("microphone requires consent and aborts on pause, permission loss, and exit
   await stubSpeech(page, { autoEnd: true });
   await beginConversation(page);
   await page.getByRole("button", { name: "Continuer", exact: true }).click();
-  await page.getByRole("button", { name: "Passer sans évaluation" }).click();
-  await page.getByRole("button", { name: "Passer sans évaluation" }).click();
+  await skipStep(page);
+  await skipStep(page);
   await page.getByRole("button", { name: "Micro", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Parler en anglais" }),
@@ -343,7 +346,7 @@ test("storage failure permits practice without a crash", async ({ page }) => {
   await stubSpeech(page, { autoEnd: true });
   await beginConversation(page);
   await page.getByRole("button", { name: "Continuer", exact: true }).click();
-  await page.getByRole("button", { name: "Passer sans évaluation" }).click();
+  await skipStep(page);
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",
@@ -394,7 +397,6 @@ test("bilingual guidance, captions, help and explicit pause stay independent", a
   ).toBeVisible();
   await expect(page.getByText(/Ce n’est pas encore ça/)).toHaveCount(0);
 
-  await page.getByRole("radio", { name: "Introducing himself" }).check();
   await pause.focus();
   await page.keyboard.press("Enter");
   await expect(
@@ -406,12 +408,13 @@ test("bilingual guidance, captions, help and explicit pause stay independent", a
     await page.evaluate((storageKey) => localStorage.getItem(storageKey), key),
   ).toBeNull();
   await page.keyboard.press("Enter");
+  // The same step, with Aide and Sous-titres exactly as they were.
   await expect(
-    page.getByRole("radio", { name: "Introducing himself" }),
-  ).toBeChecked();
+    page.getByRole("button", { name: "Introducing himself", exact: true }),
+  ).toBeVisible();
   await expect(context).toBeVisible();
   await expect(english).toBeHidden();
-  await answer(page).click();
+  await pickAndAnswer(page, "Introducing himself");
   await expect(
     page.getByRole("heading", {
       name: "Qu’est-ce que cette personne vous demande ?",

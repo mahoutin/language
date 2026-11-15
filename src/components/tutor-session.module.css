@@ -254,8 +254,14 @@
   font-size: 0.92rem;
 }
 .help {
+  display: grid;
+  gap: 0.4rem;
   border-top: 1px solid var(--surface-border);
   padding-top: 0.45rem;
+}
+.voiceNote {
+  color: var(--fg-soft);
+  font-size: 0.78rem;
 }
 .frame {
   padding: 0.4rem 0.7rem;
@@ -363,28 +369,25 @@
 .options[data-count="2"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.options label {
+.options .option,
+.stage .options button {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  justify-content: center;
   min-width: 0;
-  min-height: 44px;
-  padding: 0.35rem 0.65rem;
+  min-height: 52px;
+  padding: 0.4rem 0.75rem;
   border: 1px solid var(--surface-border);
-  border-radius: 0.8rem;
+  border-radius: 0.9rem;
   background: var(--surface);
+  color: var(--fg);
+  font-size: 1.1rem;
+  font-weight: 650;
   overflow-wrap: anywhere;
+  text-align: center;
   cursor: pointer;
 }
-.options label:has(:checked) {
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-.options input {
-  accent-color: #195d49;
-  flex: 0 0 auto;
-  margin: 0;
-}
+
 .answer {
   display: grid;
   gap: 0.3rem;
@@ -410,7 +413,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: min(100% - 1.5rem, 35rem);
+  width: min(100% - 1.5rem, 41rem);
   margin: 0.65rem auto 0.85rem;
 }
 

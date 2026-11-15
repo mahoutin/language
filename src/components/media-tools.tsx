@@ -1,26 +1,82 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import type { Segment, Speaker } from "@/domain/conversation/types";
 import type { BrowserRecognition, SpeechWindow } from "@/lib/browser-media";
 
 export type SpeechPlayback = {
-  text: string;
-  lang: "en-US" | "fr-FR";
-  rate: number;
+  segments: readonly Segment[];
   onStart: () => void;
   onEnd: () => void;
   onError: () => void;
 };
 
+// ---------- voices (what the browser can really do) ----------
+
+const speakers: readonly Speaker[] = ["Daniel", "Maria", "Alex"];
+const pitchFor: Record<Speaker, number> = { Daniel: 1, Maria: 1.2, Alex: 0.88 };
+
+function englishVoices(): SpeechSynthesisVoice[] {
+  if (!("speechSynthesis" in window)) return [];
+  const voices = window.speechSynthesis
+    .getVoices()
+    .filter((voice) => voice.lang.toLowerCase().startsWith("en"));
+  const seen = new Set<string>();
+  return voices
+    .filter((voice) => !seen.has(voice.name) && seen.add(voice.name))
+    .sort(
+      (a, b) =>
+        Number(b.lang.toLowerCase() === "en-us") -
+        Number(a.lang.toLowerCase() === "en-us"),
+    );
+}
+
+/** The voice for an English line: each character gets its own only if the browser has enough. */
+function voiceFor(speaker: Speaker): SpeechSynthesisVoice | null {
+  const voices = englishVoices();
+  if (voices.length === 0) return null;
+  return voices[speakers.indexOf(speaker)] ?? voices[0];
+}
+
+const hasOwnVoice = (speaker: Speaker) => {
+  const own = voiceFor(speaker);
+  return own !== null && own !== voiceFor("Daniel");
+};
+
+function subscribeVoices(onChange: () => void) {
+  if (!("speechSynthesis" in window)) return () => {};
+  window.speechSynthesis.addEventListener?.("voiceschanged", onChange);
+  return () =>
+    window.speechSynthesis.removeEventListener?.("voiceschanged", onChange);
+}
+
 /**
- * Plays one line with the browser's voice (a labelled simulation, not a
- * generated tutor voice). Reports start/end/error so the conversation reflects
- * what the audio is ACTUALLY doing. Returns a stop function that silences the
- * line and detaches every callback, so a cancelled line can never report late.
+ * Whether Maria and Alex really sound different from Daniel in this browser.
+ * The interface only claims a different voice when this is true.
+ */
+export function useOwnVoices(): Record<"Maria" | "Alex", boolean> {
+  const key = useSyncExternalStore(
+    subscribeVoices,
+    () =>
+      `${hasOwnVoice("Maria") ? "M" : "-"}${hasOwnVoice("Alex") ? "A" : "-"}`,
+    () => "--",
+  );
+  return { Maria: key[0] === "M", Alex: key[1] === "A" };
+}
+
+/**
+ * Plays a sequence of lines with the browser's voices (a labelled simulation,
+ * not a generated tutor voice). One output = one queue: it reports start (first
+ * line), end (last line) or error, and the returned stop function silences it
+ * and detaches every callback, so a cancelled queue can never report late.
  */
 export function playSpeech({
-  text,
-  lang,
-  rate,
+  segments,
   onStart,
   onEnd,
   onError,
@@ -30,19 +86,55 @@ export function playSpeech({
     return () => {};
   }
   window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = lang;
-  utterance.rate = rate;
-  utterance.onstart = onStart;
-  utterance.onend = onEnd;
-  utterance.onerror = (event) => {
-    if (event.error !== "interrupted" && event.error !== "canceled") onError();
+  let index = 0;
+  let started = false;
+  let stopped = false;
+  let current: SpeechSynthesisUtterance | null = null;
+  const detach = () => {
+    if (!current) return;
+    current.onstart = null;
+    current.onend = null;
+    current.onerror = null;
   };
-  window.speechSynthesis.speak(utterance);
+  const next = () => {
+    if (stopped) return;
+    detach();
+    if (index >= segments.length) {
+      onEnd();
+      return;
+    }
+    const segment = segments[index++];
+    const utterance = new SpeechSynthesisUtterance(segment.text);
+    utterance.lang = segment.lang;
+    utterance.rate = segment.rate;
+    if (segment.lang === "en-US") {
+      const voice = voiceFor(segment.speaker);
+      if (voice) utterance.voice = voice;
+      // Without a voice of their own, a character only gets a different pitch
+      // (which some browsers ignore); the interface never claims more than that.
+      utterance.pitch = hasOwnVoice(segment.speaker)
+        ? 1
+        : pitchFor[segment.speaker];
+    }
+    utterance.onstart = () => {
+      if (started || stopped) return;
+      started = true;
+      onStart();
+    };
+    utterance.onend = next;
+    utterance.onerror = (event) => {
+      if (stopped) return;
+      if (event.error === "interrupted" || event.error === "canceled") return;
+      stopped = true;
+      onError();
+    };
+    current = utterance;
+    window.speechSynthesis.speak(utterance);
+  };
+  next();
   return () => {
-    utterance.onstart = null;
-    utterance.onend = null;
-    utterance.onerror = null;
+    stopped = true;
+    detach();
     window.speechSynthesis.cancel();
   };
 }

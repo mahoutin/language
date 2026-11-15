@@ -6,7 +6,7 @@ import { basePath } from "@/lib/base-path";
 import { activities } from "@/domain/curriculum";
 import { turnOpenPhases } from "@/domain/conversation/types";
 import type { LessonAction } from "@/domain/learner";
-import { SpeechInput, useCameraPreview } from "./media-tools";
+import { SpeechInput, useCameraPreview, useOwnVoices } from "./media-tools";
 import { TutorCard } from "./tutor-card";
 import { useConversation, type CommitResult } from "./use-conversation";
 import styles from "./tutor-session.module.css";
@@ -40,6 +40,7 @@ export function TutorSession({
   const [microphoneOpen, setMicrophoneOpen] = useState(false);
   const [hint, setHint] = useState("");
   const recognitionTurn = useRef(0);
+  const ownVoices = useOwnVoices();
   const camera = useCameraPreview();
   const cameraRequested = Boolean(camera.preview) || camera.pending;
 
@@ -160,6 +161,7 @@ export function TutorSession({
             headingRef={heading}
             inputRef={input}
             hint={hint}
+            ownVoices={ownVoices}
           />
         )}
       </section>
@@ -190,6 +192,14 @@ export function TutorSession({
             onClick={cameraRequested ? camera.stop : camera.start}
           >
             <span aria-hidden="true">▣</span>Caméra
+          </button>
+          <button
+            type="button"
+            disabled={paused}
+            aria-pressed={state.prefs.voice}
+            onClick={() => send({ type: "voice_toggled" })}
+          >
+            <span aria-hidden="true">♪</span>Voix
           </button>
           <button
             type="button"
