@@ -33,6 +33,7 @@ Browser tests run against the production build on port 3100. CI performs the sam
 ## Current behavior
 
 - One scripted tutoring conversation led by "Daniel", a **simulation**: French welcome → model line → meaning checks → learner's turn → repair → transfer (Maria, then Alex) → careful recap. No AI, no live video, and the voice is the browser's speech synthesis. See [Phase 1B review](docs/PHASE_1B_REVIEW.md).
+- Daniel speaks his French reactions, instructions, repairs, check-ins and recap, and the English lines in an English voice, using your browser’s speech synthesis (nothing plays before you act; « Voix » mutes everything; every spoken line is also on screen). Choices are answered with one tap. Your first name, if you give one, is used only during the open session and is never stored.
 - The original listening, understanding, introduction, reading and transfer activities, in order, with their original ids and heuristic checks.
 - English and French guidance from the start. Captions (spoken English text) and Aide (French explanation) are separate controls.
 - Thinking time is never an outcome. Explicit Pause releases audio, microphone and camera and keeps the learner's draft. The learner can interrupt, replay, slow down, ask for French help or say "Je ne comprends pas"; none of these is recorded as an error.

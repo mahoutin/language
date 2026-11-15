@@ -12,39 +12,55 @@ Corrections made before merge, each with a regression test:
 2. **390 px overlap fixed.** At phone width, or on short viewports, the stage is exactly one viewport tall and only the card scrolls, between the header/self-view and the dock. The dock no longer floats over content, and short landscape screens keep the card beside the self-view. Test: in the densest repair state at 390×844, 360×640 and 640×360, every control and heading is scrolled into view and must not intersect the dock or the self-view. I confirmed the test fails against the previous CSS at all three sizes (it also exposed a self-view overlap at 640×360).
 3. **Recap wording.** “Trop courtes pour être comprises” implied that a short name was unintelligible. A bare word is now counted separately (`partial`) and described as understandable: « Vous avez parfois répondu par un seul mot, par exemple votre prénom. C’est compréhensible : je vous ai simplement proposé une phrase complète. » Only genuinely unreadable input (symbols, a single letter) is reported separately, without blame. A bare name no longer adds a “to rework” target. Tests assert the wording and forbid “trop courtes”, “incompréhensible”, “illisible” and “erreur” in the bare-name recap.
 
+## UX refinement pass (after the second product review)
+
+Direction: keep the deterministic state machine, curriculum authority, backward-compatible records and tests; make the experience feel like one personal conversation. Details for the product owner are in [PHASE_1B_ACCEPTANCE.md](PHASE_1B_ACCEPTANCE.md). Technical summary:
+
+- **Speech as a queue of segments.** `Effect.speak` now carries `segments: {text, lang, rate, speaker}[]` under a single output id. `entrySegments()` builds a step’s speech (reaction → French lead-in → English line → French instruction), `feedbackSegments()` the reactions, repairs and check-ins, `recapSegments()` the recap. Playback (`playSpeech`) plays one utterance per segment, reports `audio_started` on the first and `audio_ended` after the last, and its stop function detaches every callback, so cancelling cancels the whole queue and a late callback can never report.
+- **One markup source for text, language and speech.** French copy marks English with `<en>…</en>`. The same text renders `lang="en"` spans, becomes English/French speech segments (a French voice never reads English), and gives the plain text used in tests. A browser test asserts that every spoken line is readable on screen across the whole conversation.
+- **Mute is a preference, not a media state.** `prefs.voice` (dock « Voix »). When off, `speak()` emits only `stop_audio`; `replay` is invalid; unmuting never speaks. Pause, interrupt, mute and a newer output each invalidate the previous output id. `invariantViolations` also forbids a muted session from holding an output.
+- **Check-in is spoken once per turn** (`checkinTurn`); a check-in spoken during thinking time returns to thinking time (`speechFrom`), not to “answer open”.
+- **`choose` event** = one tap. It validates the option, then is handled exactly like `submit`, and is turn-scoped, so a second tap while processing, a repeated event id, or a tap rendered for an earlier turn is dropped. In the UI, options are buttons (arrow keys never answer); answers have a 400 ms double-answer guard; every flow button ignores `event.detail > 1`; key repeat of Enter/Space is blocked card-wide. The last three came from a defect found by hand during this pass: after a first click the layout changed, and the second click of a double click landed on a different control (for example “J’ai besoin d’un moment”).
+- **Session-only name.** `learnerName` lives in conversation state, set only from an answer the existing `assess()` accepted and that `extractName()` recognises as a name (stop-list: « I am fine » is not one). It is used in the acknowledgement and the recap, cleared on exit and restart, forbidden after the session ends by an invariant, and never passed to `commit` effects or learner records.
+- **Characters.** The English line carries its speaker. Voice selection uses the browser’s English voices in order (Daniel, Maria, Alex); with one voice only a pitch change is attempted. The UI says « autre voix du navigateur » or « même voix que Daniel » from what the browser actually offers (`useOwnVoices`).
+- **Option order is display-only.** `displayOrder()` places the correct option in a per-session, per-activity slot (different at each of the three choice activities); responses remain original option indices, so `assess()` and evidence are untouched. The reduced-choice position still alternates.
+- **Contextual actions.** Card actions: the options or field, one primary action, « Je ne comprends pas ». « J’ai besoin d’un moment » and « Passer sans évaluation » live in Aide; « Passer » also appears after a difficulty.
+
+Not changed, deliberately: `assess()`, activity IDs and order, evidence semantics, the storage key and schema. Not done and flagged for the owner: hiding the French translation at meaning checks (it would remove an answer cue but also first-exposure bilingual support).
+
 ## What works, what is simulated, what does not exist
 
-| Working | Simulated (scripted, labelled as such) | Not built |
-| --- | --- | --- |
-| One persistent session: welcome → model → meaning checks → learner turn → repair → transfer → recap | Daniel’s dialogue and reactions (fixed French copy and the five curriculum lines) | Any AI response, understanding of free speech, or generated explanation |
-| Typed answers, choices, optional browser speech recognition (opt-in per exercise) | Tutor voice = browser TTS. The stage reads « Séance guidée · simulation » and « Portrait d’illustration · dialogue préparé » | Live video, lip-sync, continuous listening, barge-in by speech |
-| Thinking time, explicit pause, interruption, replay, slower replay, French help, “Je ne comprends pas” | Repair is a fixed ladder of different methods (not chosen by a model) | Automatic fading of English/French aids (later phase) |
-| Existing five activities, evidence schema and local-only storage | The Maria / Alex situations are fixed curriculum lines | Server, accounts, database, cost controls |
+| Working                                                                                                | Simulated (scripted, labelled as such)                                                                                                              | Not built                                                               |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| One persistent session: welcome → model → meaning checks → learner turn → repair → transfer → recap    | Daniel’s dialogue and reactions (fixed French copy and the five curriculum lines)                                                                   | Any AI response, understanding of free speech, or generated explanation |
+| Typed answers, choices, optional browser speech recognition (opt-in per exercise)                      | Tutor voice = browser TTS, in French and English. The stage reads « Séance guidée · simulation » and « Portrait d’illustration · dialogue préparé » | Live video, lip-sync, continuous listening, barge-in by speech          |
+| Thinking time, explicit pause, interruption, replay, slower replay, French help, “Je ne comprends pas” | Repair is a fixed ladder of different methods (not chosen by a model)                                                                               | Automatic fading of English/French aids (later phase)                   |
+| Existing five activities, evidence schema and local-only storage                                       | The Maria / Alex situations are fixed curriculum lines                                                                                              | Server, accounts, database, cost controls                               |
 
 ## How the nine-step lifecycle maps onto the curriculum
 
 The five activity ids, their order, content and `assess()` are untouched. The conversation is a layer around them.
 
-| Step in the handoff | Conversation beat | Curriculum activity (authority) | Phase |
-| --- | --- | --- | --- |
-| 1 Arrival and orientation | French welcome, « Commencer » | none (no evidence) | `orientation` |
-| 2 Tutor modelling | Daniel: “Hello! My name is Daniel.” + French + context | `listen-greeting` (shown, then meaning check) | `model` → `guided_attempt` |
-| 3 Tutor invites participation | Daniel asks “What is your name?” | `listen-question` (meaning check) | `guided_attempt` |
-| 4 Learner responds | The learner’s turn, typed / recognised text | `say-name` | `guided_attempt` |
-| 5 Thinking pause | Quiet, never an outcome | — | media `thinking_pause` |
-| 6 Interruption / help | Stop voice, replay, slower, French help | — (not an answer) | any |
-| 7 Adaptive repair | Ladders below | attempts at the same activity | `scaffolded_retry`, `diagnostic_probe` |
-| 8 Transfer | Daniel introduces Maria (read), then Alex asks “And you?” | `read-intro`, `transfer` | `guided_attempt`, `transfer_attempt` |
-| 9 Natural conclusion | Recap with observed difficulty and a caveat | none | `recap` |
+| Step in the handoff           | Conversation beat                                         | Curriculum activity (authority)               | Phase                                  |
+| ----------------------------- | --------------------------------------------------------- | --------------------------------------------- | -------------------------------------- |
+| 1 Arrival and orientation     | French welcome, « Commencer »                             | none (no evidence)                            | `orientation`                          |
+| 2 Tutor modelling             | Daniel: “Hello! My name is Daniel.” + French + context    | `listen-greeting` (shown, then meaning check) | `model` → `guided_attempt`             |
+| 3 Tutor invites participation | Daniel asks “What is your name?”                          | `listen-question` (meaning check)             | `guided_attempt`                       |
+| 4 Learner responds            | The learner’s turn, typed / recognised text               | `say-name`                                    | `guided_attempt`                       |
+| 5 Thinking pause              | Quiet, never an outcome                                   | —                                             | media `thinking_pause`                 |
+| 6 Interruption / help         | Stop voice, replay, slower, French help                   | — (not an answer)                             | any                                    |
+| 7 Adaptive repair             | Ladders below                                             | attempts at the same activity                 | `scaffolded_retry`, `diagnostic_probe` |
+| 8 Transfer                    | Daniel introduces Maria (read), then Alex asks “And you?” | `read-intro`, `transfer`                      | `guided_attempt`, `transfer_attempt`   |
+| 9 Natural conclusion          | Recap with observed difficulty and a caveat               | none                                          | `recap`                                |
 
 Deviation to review: the handoff suggests Maria as the transfer speaker. Preserving curriculum content meant keeping the existing `transfer` line (“Hi there! I’m Alex. And you?”). Maria appears in the step just before (`read-intro`), introduced by Daniel as a new person. Changing the transfer wording would change the meaning of existing evidence, so it needs your approval.
 
 ### Repair ladders (each rung is a different method)
 
-| Activity type | 1st miss | 2nd | 3rd | after |
-| --- | --- | --- | --- | --- |
-| Choice (listening / reading) | slower audio + French meaning | **two** options instead of three (the correct one’s slot alternates between attempts) | French explanation + offer to continue without evaluation | the offer stays; message changes instead of repeating |
-| Speak (`say-name`, `transfer`) | slower audio + French meaning | sentence frame with a gap (« My name is … ») | **diagnostic probe**: pick the sentence that answers the question (not scored, never written) | supported retry with explanation, then offer to continue |
+| Activity type                  | 1st miss                      | 2nd                                                                                   | 3rd                                                                                           | after                                                    |
+| ------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Choice (listening / reading)   | slower audio + French meaning | **two** options instead of three (the correct one’s slot alternates between attempts) | French explanation + offer to continue without evaluation                                     | the offer stays; message changes instead of repeating    |
+| Speak (`say-name`, `transfer`) | slower audio + French meaning | sentence frame with a gap (« My name is … »)                                          | **diagnostic probe**: pick the sentence that answers the question (not scored, never written) | supported retry with explanation, then offer to continue |
 
 “Je ne comprends pas” climbs the same ladder without counting as an error. Replay, slower replay and opening Aide never climb it.
 
@@ -73,7 +89,7 @@ The conversation never writes progress. It proposes a `commit`, the existing lea
 
 ### Staleness and duplicates
 
-Every event carries `eventId`, `sessionId` and `turnId`. The reducer drops: another session, a repeated `eventId`, anything after the end, anything but resume/exit while paused, and turn-scoped events (audio callbacks, silence check-in, recognition, commit results) from an earlier turn. Each tutor line has its own output id, so the late end-of-audio of an interrupted or replaced line changes nothing. Recognised text belongs to the turn in which listening began. Ignored events return the *same* state object and a reason (`stale_turn`, `duplicate`, `paused`, `invalid_in_state`, …).
+Every event carries `eventId`, `sessionId` and `turnId`. The reducer drops: another session, a repeated `eventId`, anything after the end, anything but resume/exit while paused, and turn-scoped events (audio callbacks, silence check-in, recognition, commit results) from an earlier turn. Each tutor line has its own output id, so the late end-of-audio of an interrupted or replaced line changes nothing. Recognised text belongs to the turn in which listening began. Ignored events return the _same_ state object and a reason (`stale_turn`, `duplicate`, `paused`, `invalid_in_state`, …).
 
 ## Evidence and data protection
 
@@ -91,14 +107,14 @@ Page 02: [6:35](https://www.figma.com/design/GV3y4FmpF1C8CIqFMcurfa?node-id=6-35
 
 I opened frames 13:34 and 6:194 through the Figma connector. The others were taken from the repository’s [experience map](EXPERIENCE_TO_CODE_MAP.md), which records the earlier read-only inspection of pages 02–04; I did not re-inspect them this session.
 
-| Page 04 state | Implementation |
-| --- | --- |
-| 13:34 Tutor speaking | media `tutor_speaking`, « Arrêter la voix » |
-| 13:47 Listening open | media `listening_open`, « À vous » |
-| 13:60 Learner speaking | media `learner_speaking` (only while browser recognition is listening) |
-| 13:73 Thinking pause | media `thinking_pause`: « J’ai besoin d’un moment », or a quiet check-in after 30 s |
-| 13:86 Interruption | media `interrupted`: voice stops, French explanation opens |
-| 13:99 Repair / resume | phases `scaffolded_retry` / `diagnostic_probe`, then a fresh turn |
+| Page 04 state          | Implementation                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------------- |
+| 13:34 Tutor speaking   | media `tutor_speaking`, « Arrêter la voix »                                         |
+| 13:47 Listening open   | media `listening_open`, « À vous »                                                  |
+| 13:60 Learner speaking | media `learner_speaking` (only while browser recognition is listening)              |
+| 13:73 Thinking pause   | media `thinking_pause`: « J’ai besoin d’un moment », or a quiet check-in after 30 s |
+| 13:86 Interruption     | media `interrupted`: voice stops, French explanation opens                          |
+| 13:99 Repair / resume  | phases `scaffolded_retry` / `diagnostic_probe`, then a fresh turn                   |
 
 ## Files
 
@@ -107,7 +123,7 @@ Changed: `src/components/tutor-session.tsx` (one persistent session), `tutor-ses
 
 ## Privacy and accessibility
 
-- Nothing is requested on load: no microphone, no camera, no automatic audio (asserted by a test that counts device requests). Audio plays only as a direct result of a learner action (Commencer, Continuer, an answer, or a replay).
+- Nothing is requested on load: no microphone, no camera, no automatic audio (asserted by a test that counts device requests). Audio plays only as a result of a learner action (Commencer, an answer, a replay, asking for a moment), apart from one gentle spoken check-in after 30 s of silence, once per turn. « Voix » mutes everything, and every spoken line is also on screen.
 - Recognition stays opt-in per exercise with the same consent text. A hard microphone failure closes the speech panel, aborting recognition and revoking that consent, and shows one clear French message with « Écrire ma réponse ». Pause, exit and a hidden tab release audio, recognition and camera. Resuming never restarts audio or the microphone.
 - Silence never produces an outcome. After 30 s of an open, quiet turn the tutor only offers help; it does not count, repair, pause, or advance (unit and browser tests).
 - English phrases carry `lang="en"` inside the French interface. Status and feedback are polite live regions. Each new step moves focus to its heading. Every control has a visible name and a focus ring. The French help card changes the whole overlay’s colour tokens so every control keeps its contrast.
